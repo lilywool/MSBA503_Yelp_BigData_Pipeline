@@ -1,0 +1,112 @@
+{
+  "name": "yelp-review-intelligence-2026",
+  "max_concurrent_runs": 1,
+  "git_source": {
+    "git_url": "https://github.com/lilywool/MSBA503_Yelp_BigData_Pipeline.git",
+    "git_provider": "gitHub",
+    "git_branch": "main"
+  },
+  "tasks": [
+    {
+      "task_key": "bronze_to_silver",
+      "job_cluster_key": "yelp_pipeline_cluster",
+      "spark_python_task": {
+        "python_file": "databricks_integration/scripts/bronze_to_silver.py",
+        "source": "GIT",
+        "parameters": [
+          "--input-volume", "/Volumes/workspace/default/yelp_academic_raw",
+          "--catalog", "workspace",
+          "--schema", "default",
+          "--table-prefix", "yelp",
+          "--lexicons-dir", "/Volumes/workspace/default/yelp_academic_raw/_pipeline/lexicons",
+          "--partitions", "192",
+          "--arrow-batch-size", "5000",
+          "--nlp-component", "linguistic",
+          "--nlp-component", "vader",
+          "--nlp-component", "nrc-emotion",
+          "--nlp-component", "vad",
+          "--nlp-component", "entities",
+          "--nlp-component", "grammar",
+          "--nlp-component", "domain-lexicons",
+          "--nlp-component", "time-weighting"
+        ]
+      },
+      "max_retries": 0,
+      "timeout_seconds": 0
+    },
+    {
+      "task_key": "silver_to_gold",
+      "job_cluster_key": "yelp_pipeline_cluster",
+      "depends_on": [
+        { "task_key": "bronze_to_silver" }
+      ],
+      "spark_python_task": {
+        "python_file": "databricks_integration/scripts/silver_to_gold.py",
+        "source": "GIT",
+        "parameters": [
+          "--catalog", "workspace",
+          "--schema", "default",
+          "--table-prefix", "yelp",
+          "--input-table", "workspace.default.yelp_silver_reviews",
+          "--output-table", "workspace.default.yelp_gold_dashboard_variant",
+          "--gold-level", "brand-sample",
+          "--brand", "Chipotle",
+          "--brand", "Great Clips",
+          "--sample-size", "15000",
+          "--sample-seed", "222"
+        ]
+      },
+      "max_retries": 0,
+      "timeout_seconds": 0
+    },
+    {
+      "task_key": "data_science_dashboard",
+      "job_cluster_key": "yelp_pipeline_cluster",
+      "depends_on": [
+        { "task_key": "silver_to_gold" }
+      ],
+      "spark_python_task": {
+        "python_file": "databricks_integration/scripts/data_science_dashboard.py",
+        "source": "GIT",
+        "parameters": [
+          "--catalog", "workspace",
+          "--schema", "default",
+          "--table-prefix", "yelp",
+          "--gold-table", "workspace.default.yelp_gold_dashboard_variant"
+        ]
+      },
+      "max_retries": 0,
+      "timeout_seconds": 0
+    }
+  ],
+  "job_clusters": [
+    {
+      "job_cluster_key": "yelp_pipeline_cluster",
+      "new_cluster": {
+        "spark_version": "15.4.x-scala2.12",
+        "node_type_id": "REPLACE_WITH_A_MEMORY_OPTIMIZED_NODE_TYPE",
+        "driver_node_type_id": "REPLACE_WITH_A_MEMORY_OPTIMIZED_NODE_TYPE",
+        "autoscale": {
+          "min_workers": 2,
+          "max_workers": 4
+        },
+        "spark_conf": {
+          "spark.sql.execution.arrow.pyspark.enabled": "true",
+          "spark.sql.execution.arrow.maxRecordsPerBatch": "5000",
+          "spark.task.cpus": "1"
+        },
+        "spark_env_vars": {
+          "NLTK_DATA": "/local_disk0/nltk_data",
+          "PYSPARK_PYTHON": "/databricks/python/bin/python"
+        },
+        "init_scripts": [
+          {
+            "volumes": {
+              "destination": "/Volumes/workspace/default/yelp_academic_raw/_pipeline/init_script.sh"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

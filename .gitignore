@@ -1,0 +1,129 @@
+# ---------------------------------------------------------------------------
+# Data — never commit. The corpus lives outside this repo (parent folder's
+# raw/), and no sample, intermediate, or gold output belongs in version control.
+# ---------------------------------------------------------------------------
+raw/
+data/
+outputs/
+tmp/
+gold/
+silver/
+bronze/
+*.csv
+*.tsv
+*.parquet
+*.jsonl
+*.feather
+*.pkl
+*.pickle
+*.db
+*.sqlite3
+
+# Lexicon source files: large third-party text/tsv data. The loaders and the
+# lexicons/README.md that documents where to get them ARE tracked; the corpora
+# themselves are not.
+lexicons/*.txt
+lexicons/**/*.txt
+
+# ---------------------------------------------------------------------------
+# Pipeline run artifacts
+# ---------------------------------------------------------------------------
+pipeline_run_log.json
+parity_check_report.json
+*_REAL_distributed.csv
+*_REAL_local.csv
+spark-warehouse/
+metastore_db/
+derby.log
+
+# ---------------------------------------------------------------------------
+# Secrets and cloud credentials — nothing in this list may ever be committed.
+# A private key reached the previous repo's history this way; do not repeat it.
+# ---------------------------------------------------------------------------
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+credentials
+credentials.json
+aws_credentials
+.aws/
+databricks.cfg
+.databrickscfg
+*_secret*
+*_token*
+
+# ---------------------------------------------------------------------------
+# JVM / Spark binaries — this pipeline is deliberately JVM-free; a JAR or wheel
+# showing up here means something went wrong architecturally, not just in git.
+# ---------------------------------------------------------------------------
+jars/
+*.jar
+*.whl
+*.zip
+*.tar.gz
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib60/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments — a committed venv is what bloated the old repo.
+venv/
+env/
+ENV/
+.venv/
+yelp-env/
+*-env/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ---------------------------------------------------------------------------
+# Notebooks
+# ---------------------------------------------------------------------------
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# ---------------------------------------------------------------------------
+# OS / editor
+# ---------------------------------------------------------------------------
+desktop.ini
+Thumbs.db
+ehthumbs.db
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

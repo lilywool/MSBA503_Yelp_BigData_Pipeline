@@ -1,0 +1,19 @@
+# Local dev / smoke-testing requirements (e.g. running tests/parity_check.py
+# with a local Spark master, no cluster needed). For cluster-scoped installs,
+# see databricks_integration/requirements.txt or aws_emr/bootstrap.sh -
+# those are pinned separately and are the ones that actually matter for
+# reproducing a cluster run.
+
+pyspark==3.5.6
+pyarrow==12.0.1
+pandas==2.2.3
+numpy==1.26.4
+vaderSentiment==3.3.2
+nrclex==4.1.0
+spacy==3.8.16
+textblob==0.20.1
+nltk==3.10.3
+
+# after pip install (the bootstrap pins this compatible model exactly):
+#   pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+#   python -c "import nltk; nltk.download('punkt_tab'); nltk.download('averaged_perceptron_tagger_eng')"

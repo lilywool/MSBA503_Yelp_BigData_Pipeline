@@ -1,0 +1,8 @@
+pandas==2.2.3
+numpy==1.26.4
+pyarrow==12.0.1
+vaderSentiment==3.3.2
+nrclex==4.1.0
+spacy==3.8.16
+textblob==0.20.1
+nltk==3.10.3

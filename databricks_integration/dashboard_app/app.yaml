@@ -1,0 +1,12 @@
+command: ['streamlit', 'run', 'app.py']
+env:
+  - name: 'DATABRICKS_WAREHOUSE_ID'
+    valueFrom: 'sql_warehouse'
+  - name: 'YELP_CATALOG'
+    value: 'workspace'
+  - name: 'YELP_SCHEMA'
+    value: 'default'
+  - name: 'YELP_TABLE_PREFIX'
+    value: 'yelp'
+  - name: 'STREAMLIT_GATHER_USAGE_STATS'
+    value: 'false'
