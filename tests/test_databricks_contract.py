@@ -16,37 +16,53 @@ from corrected_feature_engineering import output_columns_for
 
 
 class DatabricksContractTests(unittest.TestCase):
-    def test_job_has_the_required_ordered_tasks_and_volume(self):
+    def test_job_has_ordered_tasks_and_independent_sample_controls(self):
         config = json.loads(
             (REPO_ROOT / "databricks_integration" / "job_config.json").read_text()
         )
         tasks = {task["task_key"]: task for task in config["tasks"]}
         self.assertEqual(
             list(tasks),
-            ["bronze_to_silver", "silver_to_gold", "data_science_dashboard"],
+            [
+                "bronze_to_silver_yelp",
+                "silver_to_gold_yelp",
+                "data_science_dashboard_yelp",
+            ],
         )
-        self.assertNotIn("depends_on", tasks["bronze_to_silver"])
+        self.assertNotIn("depends_on", tasks["bronze_to_silver_yelp"])
         self.assertEqual(
-            tasks["silver_to_gold"]["depends_on"],
-            [{"task_key": "bronze_to_silver"}],
+            tasks["silver_to_gold_yelp"]["depends_on"],
+            [{"task_key": "bronze_to_silver_yelp"}],
         )
         self.assertEqual(
-            tasks["data_science_dashboard"]["depends_on"],
-            [{"task_key": "silver_to_gold"}],
+            tasks["data_science_dashboard_yelp"]["depends_on"],
+            [{"task_key": "silver_to_gold_yelp"}],
         )
-        parameters = tasks["bronze_to_silver"]["spark_python_task"]["parameters"]
-        self.assertIn("/Volumes/workspace/default/yelp_academic_raw", parameters)
+        parameters = tasks["bronze_to_silver_yelp"]["spark_python_task"]["parameters"]
+        self.assertIn("--google-drive-folder-url", parameters)
+        self.assertIn("--google-drive-connection", parameters)
+        self.assertIn("--silver-sample-size", parameters)
+        self.assertIn("{{job.parameters.silver_sample_size}}", parameters)
         self.assertIn("--lexicons-dir", parameters)
         self.assertIn("--partitions", parameters)
 
-        gold_parameters = tasks["silver_to_gold"]["spark_python_task"]["parameters"]
+        gold_parameters = tasks["silver_to_gold_yelp"]["spark_python_task"]["parameters"]
         self.assertIn("--gold-level", gold_parameters)
         self.assertIn("brand-sample", gold_parameters)
+        self.assertIn("--gold-sample-size", gold_parameters)
+        self.assertIn("{{job.parameters.gold_sample_size}}", gold_parameters)
         self.assertEqual(gold_parameters.count("--brand"), 2)
 
-        dashboard_parameters = tasks["data_science_dashboard"]["spark_python_task"]["parameters"]
+        dashboard_parameters = tasks["data_science_dashboard_yelp"]["spark_python_task"]["parameters"]
         self.assertIn("--gold-table", dashboard_parameters)
-        self.assertNotIn("--sample-size", dashboard_parameters)
+        self.assertNotIn("--gold-sample-size", dashboard_parameters)
+
+        defaults = {item["name"]: item["default"] for item in config["parameters"]}
+        self.assertEqual(defaults["silver_sample_size"], "25000")
+        self.assertEqual(defaults["gold_sample_size"], "5000")
+        self.assertTrue(
+            config["job_clusters"][0]["new_cluster"]["spark_version"].startswith("17.3")
+        )
 
         for task in tasks.values():
             python_file = task["spark_python_task"]["python_file"]

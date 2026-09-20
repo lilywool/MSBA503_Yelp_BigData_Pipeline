@@ -1,6 +1,32 @@
 {
   "name": "yelp-review-intelligence-2026",
   "max_concurrent_runs": 1,
+  "parameters": [
+    {
+      "name": "google_drive_folder_url",
+      "default": "REPLACE_WITH_GOOGLE_DRIVE_FOLDER_URL"
+    },
+    {
+      "name": "google_drive_connection",
+      "default": "yelp_google_drive"
+    },
+    {
+      "name": "silver_sample_size",
+      "default": "25000"
+    },
+    {
+      "name": "silver_sample_seed",
+      "default": "222"
+    },
+    {
+      "name": "gold_sample_size",
+      "default": "5000"
+    },
+    {
+      "name": "gold_sample_seed",
+      "default": "222"
+    }
+  ],
   "git_source": {
     "git_url": "https://github.com/lilywool/MSBA503_Yelp_BigData_Pipeline.git",
     "git_provider": "gitHub",
@@ -8,19 +34,22 @@
   },
   "tasks": [
     {
-      "task_key": "bronze_to_silver",
+      "task_key": "bronze_to_silver_yelp",
       "job_cluster_key": "yelp_pipeline_cluster",
       "spark_python_task": {
         "python_file": "databricks_integration/scripts/bronze_to_silver.py",
         "source": "GIT",
         "parameters": [
-          "--input-volume", "/Volumes/workspace/default/yelp_academic_raw",
+          "--google-drive-folder-url", "{{job.parameters.google_drive_folder_url}}",
+          "--google-drive-connection", "{{job.parameters.google_drive_connection}}",
           "--catalog", "workspace",
           "--schema", "default",
           "--table-prefix", "yelp",
           "--lexicons-dir", "/Volumes/workspace/default/yelp_academic_raw/_pipeline/lexicons",
           "--partitions", "192",
           "--arrow-batch-size", "5000",
+          "--silver-sample-size", "{{job.parameters.silver_sample_size}}",
+          "--silver-sample-seed", "{{job.parameters.silver_sample_seed}}",
           "--nlp-component", "linguistic",
           "--nlp-component", "vader",
           "--nlp-component", "nrc-emotion",
@@ -35,10 +64,10 @@
       "timeout_seconds": 0
     },
     {
-      "task_key": "silver_to_gold",
+      "task_key": "silver_to_gold_yelp",
       "job_cluster_key": "yelp_pipeline_cluster",
       "depends_on": [
-        { "task_key": "bronze_to_silver" }
+        { "task_key": "bronze_to_silver_yelp" }
       ],
       "spark_python_task": {
         "python_file": "databricks_integration/scripts/silver_to_gold.py",
@@ -52,18 +81,18 @@
           "--gold-level", "brand-sample",
           "--brand", "Chipotle",
           "--brand", "Great Clips",
-          "--sample-size", "15000",
-          "--sample-seed", "222"
+          "--gold-sample-size", "{{job.parameters.gold_sample_size}}",
+          "--gold-sample-seed", "{{job.parameters.gold_sample_seed}}"
         ]
       },
       "max_retries": 0,
       "timeout_seconds": 0
     },
     {
-      "task_key": "data_science_dashboard",
+      "task_key": "data_science_dashboard_yelp",
       "job_cluster_key": "yelp_pipeline_cluster",
       "depends_on": [
-        { "task_key": "silver_to_gold" }
+        { "task_key": "silver_to_gold_yelp" }
       ],
       "spark_python_task": {
         "python_file": "databricks_integration/scripts/data_science_dashboard.py",
@@ -83,7 +112,7 @@
     {
       "job_cluster_key": "yelp_pipeline_cluster",
       "new_cluster": {
-        "spark_version": "15.4.x-scala2.12",
+        "spark_version": "17.3.x-scala2.13",
         "node_type_id": "REPLACE_WITH_A_MEMORY_OPTIMIZED_NODE_TYPE",
         "driver_node_type_id": "REPLACE_WITH_A_MEMORY_OPTIMIZED_NODE_TYPE",
         "autoscale": {

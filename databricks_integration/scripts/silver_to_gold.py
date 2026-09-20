@@ -66,8 +66,24 @@ def parse_args(argv=None):
     parser.add_argument("--input-table", default=None)
     parser.add_argument("--output-table", default=None)
     parser.add_argument("--gold-level", choices=GOLD_LEVELS, required=True)
-    parser.add_argument("--sample-size", type=int)
-    parser.add_argument("--sample-seed", type=int, default=222)
+    parser.add_argument(
+        "--gold-sample-size",
+        "--sample-size",
+        dest="gold_sample_size",
+        type=int,
+        help=(
+            "Maximum Silver reviews retained in a row-level Gold sample. For "
+            "brand-sample this limit is applied independently to each brand. "
+            "The --sample-size spelling is a backward-compatible alias."
+        ),
+    )
+    parser.add_argument(
+        "--gold-sample-seed",
+        "--sample-seed",
+        dest="gold_sample_seed",
+        type=int,
+        default=222,
+    )
     parser.add_argument("--brand", action="append", dest="brands")
     parser.add_argument("--business-id", action="append", dest="business_ids")
     parser.add_argument("--business-name", action="append", dest="business_names")
@@ -206,6 +222,17 @@ def deterministic_sample(frame, sample_size: int, seed: int):
         .limit(sample_size)
         .drop("_sample_hash")
     )
+
+
+def effective_sample_size(requested_size: int | None, eligible_rows: int) -> int | None:
+    """Cap a requested Gold sample at the filtered Silver population."""
+    if requested_size is None:
+        return None
+    if requested_size < 1:
+        raise ValueError("--gold-sample-size must be at least 1")
+    if eligible_rows < 0:
+        raise ValueError("eligible_rows cannot be negative")
+    return min(requested_size, eligible_rows)
 
 
 def build_brand_sample(frame, brands: list[str], sample_size: int, seed: int):
@@ -385,8 +412,8 @@ def main(argv=None) -> int:
         "input_table": input_table,
         "output_table": output_table,
         "gold_level": args.gold_level,
-        "sample_size": args.sample_size,
-        "sample_seed": args.sample_seed,
+        "gold_sample_size": args.gold_sample_size,
+        "gold_sample_seed": args.gold_sample_seed,
         "filters": {
             "business_ids": args.business_ids,
             "business_names": args.business_names,
@@ -430,11 +457,27 @@ def main(argv=None) -> int:
             max_stars=args.max_stars,
         )
         metrics["eligible_silver_rows"] = filtered.count()
+        effective_gold_sample_size = effective_sample_size(
+            args.gold_sample_size,
+            metrics["eligible_silver_rows"],
+        )
+        metrics["requested_gold_sample_size"] = args.gold_sample_size
+        metrics["effective_gold_sample_size"] = effective_gold_sample_size
+        if (
+            args.gold_sample_size is not None
+            and effective_gold_sample_size < args.gold_sample_size
+        ):
+            print(
+                "WARNING: requested Gold sample size "
+                f"{args.gold_sample_size:,} exceeds the eligible Silver population "
+                f"of {metrics['eligible_silver_rows']:,}; using "
+                f"{effective_gold_sample_size:,}."
+            )
         gold = build_gold_variant(
             filtered,
             gold_level=args.gold_level,
-            sample_size=args.sample_size,
-            sample_seed=args.sample_seed,
+            sample_size=effective_gold_sample_size,
+            sample_seed=args.gold_sample_seed,
             brands=args.brands,
             date_granularity=args.date_granularity,
             emotion_column=args.emotion_column,
@@ -445,7 +488,7 @@ def main(argv=None) -> int:
         metrics["validation"] = validate_gold(
             gold,
             args.gold_level,
-            args.sample_size,
+            effective_gold_sample_size,
             expected_variants=args.brands if args.gold_level == "brand-sample" else None,
         )
         write_delta_table(gold, output_table, "overwrite")

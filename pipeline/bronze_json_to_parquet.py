@@ -228,7 +228,7 @@ def parse_args(argv=None):
                         help="Directory/URI that will receive the three Parquet datasets")
     parser.add_argument(
         "--datasets", nargs="+", choices=tuple(DATASETS), default=list(DATASETS),
-        help="Datasets to convert (default: review business user)",
+        help="Datasets to convert (default: all five)",
     )
     parser.add_argument("--review-partitions", type=int,
                         default=DATASETS["review"].default_partitions)

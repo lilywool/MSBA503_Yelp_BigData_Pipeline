@@ -60,7 +60,7 @@ class DashboardTransformTests(unittest.TestCase):
         self.assertTrue(cafe["recommended_focus"])
 
     def test_bronze_to_silver_canary_sample_is_stable(self):
-        from bronze_to_silver import sample_reviews
+        from bronze_to_silver import sample_reviews, scope_related_dataset
 
         reviews = self.spark.createDataFrame(
             [("r1",), ("r2",), ("r3",), ("r4",)],
@@ -77,6 +77,52 @@ class DashboardTransformTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), 2)
         self.assertEqual(sample_reviews(reviews, None, 42).count(), 4)
+
+        selected = self.spark.createDataFrame(
+            [("r1", "b1", "u1"), ("r2", "b1", "u2")],
+            ["review_id", "business_id", "user_id"],
+        )
+        businesses = self.spark.createDataFrame(
+            [("b1", "kept"), ("b2", "excluded")],
+            ["business_id", "name"],
+        )
+        users = self.spark.createDataFrame(
+            [("u1", "kept"), ("u2", "kept"), ("u3", "excluded")],
+            ["user_id", "name"],
+        )
+        scoped_businesses = scope_related_dataset(businesses, "business", selected)
+        scoped_users = scope_related_dataset(users, "user", selected)
+        self.assertEqual([row.business_id for row in scoped_businesses.collect()], ["b1"])
+        self.assertEqual(
+            {row.user_id for row in scoped_users.collect()},
+            {"u1", "u2"},
+        )
+
+    def test_silver_and_gold_sample_arguments_are_independent(self):
+        from bronze_to_silver import parse_args as parse_bronze_args
+        from silver_to_gold import parse_args as parse_gold_args
+        from silver_to_gold import effective_sample_size
+
+        bronze = parse_bronze_args(
+            [
+                "--input-volume", "/tmp/yelp",
+                "--silver-sample-size", "25000",
+                "--silver-sample-seed", "11",
+            ]
+        )
+        gold = parse_gold_args(
+            [
+                "--gold-level", "sample",
+                "--gold-sample-size", "5000",
+                "--gold-sample-seed", "29",
+            ]
+        )
+        self.assertEqual(bronze.silver_sample_size, 25000)
+        self.assertEqual(bronze.silver_sample_seed, 11)
+        self.assertEqual(gold.gold_sample_size, 5000)
+        self.assertEqual(gold.gold_sample_seed, 29)
+        self.assertEqual(effective_sample_size(50000, 25000), 25000)
+        self.assertEqual(effective_sample_size(5000, 25000), 5000)
 
     def test_gold_dependencies_and_deterministic_sampling(self):
         from silver_to_gold import (

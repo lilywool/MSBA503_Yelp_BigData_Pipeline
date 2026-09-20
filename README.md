@@ -25,35 +25,51 @@ ownership documented there.
 The current implementation moves the production-shaped pathway to Databricks:
 
 ```text
-Yelp JSON files in a Unity Catalog Volume
+Yelp JSON files in Google Drive
         |
         v
-bronze_to_silver
-  five explicit-schema Bronze Delta tables
+bronze_to_silver_yelp
+  deterministic bounded review selection
+  + relationally scoped explicit-schema Bronze Delta tables
   + canonical review/business/user join
   + selected NLP, lexicon, grammar, and time features on every selected review
         |
         v
-silver_to_gold
+silver_to_gold_yelp
   parameterized business, user, date, industry, NLP, or sampled variants
         |
         v
-data_science_dashboard
+data_science_dashboard_yelp
   serving views derived directly from the selected row-level Gold variant
         |
         v
 Databricks Streamlit App
-  stable, shareable workspace link
+  deployable interface over the dashboard-serving tables
 ```
 
-The selected source Volume is already defined in the job template:
+### Configure a run by purpose
 
-```text
-/Volumes/workspace/default/yelp_academic_raw
-```
+Each run makes a small set of deliberate choices:
 
-See `databricks_integration/README.md` for the remaining lexicon/init-script
-uploads and the exact three-task job configuration.
+- **Source:** read the five raw Yelp files from an authorized Google Drive
+  folder, while keeping code and licensed lexicons in their governed locations.
+- **Workload:** choose how many reviews reach Silver and receive the selected
+  feature engineering.
+- **Features:** run the complete standard NLP stack or select only the
+  linguistic, sentiment, emotion, affect, entity, grammar, domain-lexicon,
+  time-weighting, or optional transformer families needed for the run.
+- **Analytical scope:** shape Gold around brands, businesses, users, industries,
+  time periods, geography, ratings, sentiment, emotions, or a deterministic
+  review sample.
+- **Presentation:** build the dashboard-serving layer directly from the chosen
+  row-level Gold result.
+
+Silver and Gold have independent limits. If a requested Gold sample is larger
+than the eligible Silver population, the pipeline safely uses the available
+rows and records both values. The illustrated
+[Databricks pipeline parameter guide](docs/databricks_pipeline_parameter_guide.pdf)
+explains the three tasks, recommended workflow, JSON formatting, tailored
+examples, complete parameter reference, and verification boundary.
 
 ## Silver feature layer
 
@@ -76,14 +92,14 @@ batches, preventing separate local and cloud feature definitions.
 Spark provides distribution rather than a second NLP implementation. Each
 executor receives bounded Arrow/pandas batches; pandas never receives the full
 8.6-million-row corpus at once. There is no Spark NLP JAR or JVM-side feature
-logic. Transformer experiments remain part of the historical SageMaker story
-and are not silently installed into this pipeline environment.
+logic. The standard Databricks feature set excludes transformers; transformer
+inference is an explicit opt-in that requires its separate model runtime and
+suitable compute. The coursework-era SageMaker work remains part of the
+historical AWS story.
 
 For a canary, Bronze-to-Silver can select a deterministic review subset before
-the expensive feature pass. It can also opt into any combination of the feature
-families documented in `databricks_integration/README.md`. The default remains
-the complete non-transformer feature set; transformer columns are explicit
-opt-in and require their separate runtime dependencies.
+the expensive feature pass. It can also opt into any combination of feature
+families. The default remains the complete non-transformer feature set.
 
 ## Repository layout
 
@@ -95,7 +111,7 @@ dashboard/                   local dashboard-data compatibility utility
 archival/                    curated coursework context and unchanged team notebook
 tests/                       synthetic regression and Spark integration tests
 scripts/                     isolated local environment and strict no-skips test gate
-docs/                        verification record and implementation notes
+docs/                        designed Databricks pipeline and verification guide
 lexicons/                    download instructions only; licensed files are not tracked
 ```
 
@@ -118,10 +134,10 @@ With the default configuration, the job creates these Unity Catalog tables in
 
 The job template uses Chipotle and Great Clips only as an example of a
 reproducible brand-comparison Gold variant. The original coursework sample is
-archival and is not a live pipeline input. The dashboard app queries only the
-selected Gold variant's bounded serving tables through a Databricks SQL
-warehouse. Its service principal receives least-privilege access; no token or
-password is stored in this repository.
+archival and is not a live pipeline input. The dashboard app is configured to
+query only the selected Gold variant's bounded serving tables through a
+Databricks SQL warehouse. When deployed, its service principal should receive
+least-privilege access; no token or password is stored in this repository.
 
 ## AWS EMR pathway
 
@@ -148,10 +164,12 @@ tests, and any skipped test. A genuine pass ends with:
 GENUINE PASS: N tests executed; 0 failures, 0 errors, 0 skips.
 ```
 
-The current pinned WSL2 verification completed 15 tests with no failures, errors,
+The current pinned WSL2 verification completed 16 tests with no failures, errors,
 or skips on 2026-09-20. Corrected local-versus-Spark parity also passed on two
-disjoint 1,500-row slices across all 68 expected feature columns. See
-`docs/local_verification.md` for the exact environment and limitations.
+disjoint 1,500-row slices across all 68 expected feature columns. The exact
+environment, commands, evidence boundary, implementation architecture, and
+Databricks task parameters are consolidated in the
+[Databricks pipeline parameter guide](docs/databricks_pipeline_parameter_guide.pdf).
 
 ## Current status
 
