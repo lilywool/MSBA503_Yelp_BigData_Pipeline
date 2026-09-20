@@ -18,7 +18,8 @@ Lily built the data-engineering and NLP pipeline. The team dashboard built on
 that work: Alex developed the descriptive and predictive experience, and Eddie
 developed the diagnostic and prescriptive modules. The original notebook is
 preserved unchanged under `archival/coursework_dashboard/`, with detailed module
-ownership documented there.
+ownership documented there. The presentation for the MSBA 503 class is available
+in [docs/MSBA 503 Yelp Analytics Dashboard.pdf](<docs/MSBA 503 Yelp Analytics Dashboard.pdf>).
 
 ### 2026 upgrade: Databricks
 
