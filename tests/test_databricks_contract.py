@@ -121,6 +121,41 @@ class DatabricksContractTests(unittest.TestCase):
             self.assertNotIn("__file__", namespace)
             self.assertEqual(namespace["SCRIPT_PATH"], script.resolve())
 
+    def test_serverless_managed_arrow_configs_are_optional(self):
+        from bronze_to_silver import configure_arrow_runtime
+
+        class ManagedConf:
+            def __init__(self):
+                self.keys = []
+
+            def set(self, key, value):
+                self.keys.append((key, value))
+                raise RuntimeError(
+                    "[CONFIG_NOT_AVAILABLE.WITHOUT_SUGGESTION] Configuration "
+                    f"{key} is not available"
+                )
+
+        conf = ManagedConf()
+        result = configure_arrow_runtime(type("Spark", (), {"conf": conf})(), 500)
+        self.assertEqual(
+            result,
+            {
+                "spark.sql.execution.arrow.pyspark.enabled": False,
+                "spark.sql.execution.arrow.maxRecordsPerBatch": False,
+            },
+        )
+        self.assertEqual(len(conf.keys), 2)
+
+    def test_unexpected_arrow_configuration_errors_still_fail(self):
+        from bronze_to_silver import configure_arrow_runtime
+
+        class BrokenConf:
+            def set(self, key, value):
+                raise RuntimeError("authentication failed")
+
+        with self.assertRaisesRegex(RuntimeError, "authentication failed"):
+            configure_arrow_runtime(type("Spark", (), {"conf": BrokenConf()})(), 500)
+
     def test_unity_catalog_names_are_restricted(self):
         self.assertEqual(
             table_name("workspace", "default", "yelp_gold_dashboard_variant"),

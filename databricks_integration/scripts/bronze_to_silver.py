@@ -281,13 +281,39 @@ def scope_related_dataset(frame, dataset_name: str, selected_reviews):
     raise ValueError(f"Unsupported Yelp dataset: {dataset_name}")
 
 
+def configure_arrow_runtime(spark, batch_size: int) -> dict[str, bool]:
+    """Apply optional classic-Spark Arrow settings when the runtime permits it.
+
+    Databricks serverless uses Spark Connect and manages these settings itself.
+    Its configuration API rejects both keys with CONFIG_NOT_AVAILABLE; that is
+    an expected managed-runtime boundary, not a pipeline failure.
+    """
+    settings = {
+        "spark.sql.execution.arrow.pyspark.enabled": "true",
+        "spark.sql.execution.arrow.maxRecordsPerBatch": str(batch_size),
+    }
+    applied = {}
+    for key, value in settings.items():
+        try:
+            spark.conf.set(key, value)
+            applied[key] = True
+        except Exception as exc:
+            if "CONFIG_NOT_AVAILABLE" not in str(exc):
+                raise
+            applied[key] = False
+            print(
+                "INFO: runtime manages unavailable Spark configuration "
+                f"{key}; continuing with the serverless default."
+            )
+    return applied
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     if args.arrow_batch_size < 1:
         raise ValueError("--arrow-batch-size must be at least 1")
     spark = SparkSession.builder.appName("yelp-bronze-to-silver").getOrCreate()
-    spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
-    spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", args.arrow_batch_size)
+    arrow_runtime_config = configure_arrow_runtime(spark, args.arrow_batch_size)
     ensure_schema(spark, args.catalog, args.schema)
     audit_table = table_name(args.catalog, args.schema, f"{args.table_prefix}_pipeline_audit")
     metrics = {
@@ -317,6 +343,8 @@ def main(argv=None) -> int:
         "bronze_rows": {},
         "silver_sample_size": args.silver_sample_size,
         "silver_sample_seed": args.silver_sample_seed,
+        "arrow_batch_size_requested": args.arrow_batch_size,
+        "arrow_runtime_config_applied": arrow_runtime_config,
         "nlp_components": list(
             cfe.normalize_feature_groups(
                 args.nlp_components,
