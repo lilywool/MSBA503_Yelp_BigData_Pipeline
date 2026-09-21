@@ -170,6 +170,58 @@ class DashboardTransformTests(unittest.TestCase):
         self.assertTrue(reader.options["recursiveFileLookup"])
         self.assertEqual(reader.loads, [folder_url] * len(LEXICON_FILENAMES))
 
+    def test_google_drive_json_file_is_resolved_before_structured_read(self):
+        from bronze_to_silver import _google_drive_file_url
+
+        expected_file_url = "https://drive.google.com/file/d/review-file-id"
+
+        class DiscoveryFrame:
+            def select(self, *columns):
+                self.columns = columns
+                return self
+
+            def collect(self):
+                return [{"path": expected_file_url}]
+
+        class DiscoveryReader:
+            def __init__(self):
+                self.options = {}
+                self.loaded = None
+
+            def format(self, value):
+                self.format_name = value
+                return self
+
+            def option(self, key, value):
+                self.options[key] = value
+                return self
+
+            def load(self, value):
+                self.loaded = value
+                return DiscoveryFrame()
+
+        reader = DiscoveryReader()
+        spark = type("Spark", (), {"read": reader})()
+        actual = _google_drive_file_url(
+            spark,
+            folder_url="https://drive.google.com/drive/folders/parent-id",
+            connection="yelp_google_drive",
+            filename="yelp_academic_dataset_review.json",
+        )
+
+        self.assertEqual(actual, expected_file_url)
+        self.assertEqual(reader.format_name, "binaryFile")
+        self.assertEqual(reader.options["databricks.connection"], "yelp_google_drive")
+        self.assertEqual(
+            reader.options["pathGlobFilter"],
+            "yelp_academic_dataset_review.json",
+        )
+        self.assertTrue(reader.options["recursiveFileLookup"])
+        self.assertEqual(
+            reader.loaded,
+            "https://drive.google.com/drive/folders/parent-id",
+        )
+
     def test_silver_and_gold_sample_arguments_are_independent(self):
         from bronze_to_silver import parse_args as parse_bronze_args
         from silver_to_gold import parse_args as parse_gold_args

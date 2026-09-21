@@ -196,6 +196,37 @@ def _feature_lexicon_paths(spark, args):
     yield resolve_lexicon_paths(args)
 
 
+def _google_drive_file_url(
+    spark,
+    *,
+    folder_url: str,
+    connection: str,
+    filename: str,
+) -> str:
+    """Resolve one exact Drive filename to the connector's readable file URL.
+
+    Databricks can enumerate a Drive folder through ``binaryFile`` even when a
+    structured reader cannot open that folder URL directly. Selecting only
+    ``path`` lets column pruning avoid materializing the file content.
+    """
+    matches = (
+        spark.read.format("binaryFile")
+        .option("databricks.connection", connection)
+        .option("pathGlobFilter", filename)
+        .option("recursiveFileLookup", True)
+        .load(folder_url)
+        .select("path")
+        .collect()
+    )
+    if len(matches) != 1:
+        found = [row["path"] for row in matches]
+        raise ValueError(
+            f"Expected exactly one Google Drive file named {filename!r}; "
+            f"found {len(matches)}: {found}"
+        )
+    return matches[0]["path"]
+
+
 def _read_json(
     spark,
     spec,
@@ -211,10 +242,16 @@ def _read_json(
         .option("multiLine", False)
     )
     if google_drive_folder_url:
+        file_url = _google_drive_file_url(
+            spark,
+            folder_url=google_drive_folder_url,
+            connection=google_drive_connection,
+            filename=spec.filename,
+        )
         frame = (
             reader.option("databricks.connection", google_drive_connection)
-            .option("pathGlobFilter", spec.filename)
-            .json(google_drive_folder_url)
+            .format("json")
+            .load(file_url)
         )
     else:
         frame = reader.json(join_path(input_volume, spec.filename))
