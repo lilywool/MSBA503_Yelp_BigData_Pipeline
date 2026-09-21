@@ -168,7 +168,7 @@ tests, and any skipped test. A genuine pass ends with:
 GENUINE PASS: N tests executed; 0 failures, 0 errors, 0 skips.
 ```
 
-The current pinned WSL2 verification completed 19 tests with no failures, errors,
+The current pinned WSL2 verification completed 20 tests with no failures, errors,
 or skips on 2026-09-21. Corrected local-versus-Spark parity also passed on two
 disjoint 1,500-row slices across all 68 expected feature columns. The exact
 environment, commands, evidence boundary, implementation architecture, and

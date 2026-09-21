@@ -13,10 +13,17 @@ from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+_ENTRYPOINT = globals().get("__file__") or globals().get("filename")
+if not _ENTRYPOINT:
+    raise RuntimeError(
+        "Unable to locate the Python task file. Expected __file__ or the "
+        "Databricks Workspace wrapper variable 'filename'."
+    )
+SCRIPT_PATH = Path(_ENTRYPOINT).resolve()
+REPO_ROOT = SCRIPT_PATH.parents[2]
 PIPELINE_DIR = REPO_ROOT / "pipeline"
 sys.path.insert(0, str(PIPELINE_DIR))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from bronze_json_to_parquet import DATASETS, join_path  # noqa: E402
 from lexicon_cli import (  # noqa: E402

@@ -12,8 +12,15 @@ from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_ENTRYPOINT = globals().get("__file__") or globals().get("filename")
+if not _ENTRYPOINT:
+    raise RuntimeError(
+        "Unable to locate the Python task file. Expected __file__ or the "
+        "Databricks Workspace wrapper variable 'filename'."
+    )
+SCRIPT_PATH = Path(_ENTRYPOINT).resolve()
+REPO_ROOT = SCRIPT_PATH.parents[2]
+sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from common import (  # noqa: E402
     append_audit,

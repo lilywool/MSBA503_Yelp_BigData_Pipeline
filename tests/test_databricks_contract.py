@@ -101,6 +101,26 @@ class DatabricksContractTests(unittest.TestCase):
         self.assertIn("en_core_web_sm-3.8.0", requirements)
         self.assertTrue((REPO_ROOT / "pyproject.toml").is_file())
 
+    def test_workspace_python_tasks_run_without_dunder_file(self):
+        """Databricks Workspace tasks use exec() and expose `filename` instead."""
+        for script_name in (
+            "bronze_to_silver.py",
+            "silver_to_gold.py",
+            "data_science_dashboard.py",
+        ):
+            script = SCRIPTS / script_name
+            namespace = {
+                "__name__": f"_workspace_exec_test_{script.stem}",
+                "filename": str(script),
+            }
+            exec(
+                compile(script.read_bytes(), str(script), "exec"),
+                namespace,
+                namespace,
+            )
+            self.assertNotIn("__file__", namespace)
+            self.assertEqual(namespace["SCRIPT_PATH"], script.resolve())
+
     def test_unity_catalog_names_are_restricted(self):
         self.assertEqual(
             table_name("workspace", "default", "yelp_gold_dashboard_variant"),
