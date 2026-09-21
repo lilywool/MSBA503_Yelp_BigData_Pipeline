@@ -14,7 +14,9 @@ Usage:
     python real_feature_engineering.py --vad-lexicon path.txt   # custom lexicon path
 """
 
+import hashlib
 import re
+from io import BytesIO
 import pandas as pd
 import numpy as np
 
@@ -83,12 +85,17 @@ _loaded_vad_path = None
 # Setup
 # ---------------------------------------------------------------------------
 
-def load_vad_lexicon(vad_lexicon_path: str) -> dict:
+def load_vad_lexicon(vad_lexicon_path: str | bytes) -> dict:
     """Load single-word NRC-VAD terms without treating words as missing data."""
     # `null` is a valid English term in NRC-VAD. Pandas otherwise interprets
     # it as an NA marker, which both drops the score and breaks string filters.
+    source = (
+        BytesIO(bytes(vad_lexicon_path))
+        if isinstance(vad_lexicon_path, (bytes, bytearray))
+        else vad_lexicon_path
+    )
     vad_df = pd.read_csv(
-        vad_lexicon_path,
+        source,
         sep="\t",
         keep_default_na=False,
         na_values=[],
@@ -97,14 +104,21 @@ def load_vad_lexicon(vad_lexicon_path: str) -> dict:
     return vad_df.set_index("term")[["valence", "arousal", "dominance"]].to_dict("index")
 
 
-def init_models(vad_lexicon_path: str = DEFAULT_VAD_LEXICON_PATH) -> None:
+def init_models(
+    vad_lexicon_path: str = DEFAULT_VAD_LEXICON_PATH,
+    vad_lexicon_payload: bytes | None = None,
+) -> None:
     """Load spaCy, VADER, NRC emotion lexicon, and the NRC-VAD lexicon.
 
     Must be called once before process_dataframe(). Kept out of module scope so
     importing this file (e.g. from the analysis notebook) is cheap and safe.
     """
     global nlp, vader, VAD_LOOKUP, _nrc, _loaded_vad_path
-    resolved_vad_path = str(vad_lexicon_path)
+    resolved_vad_path = (
+        "payload:" + hashlib.sha256(vad_lexicon_payload).hexdigest()
+        if vad_lexicon_payload is not None
+        else str(vad_lexicon_path)
+    )
     # Spark commonly reuses a Python worker for several partitions. Avoid
     # reloading spaCy and reparsing 44K VAD terms every time that happens.
     if nlp is not None and _loaded_vad_path == resolved_vad_path:
@@ -112,7 +126,7 @@ def init_models(vad_lexicon_path: str = DEFAULT_VAD_LEXICON_PATH) -> None:
     import spacy
 
     print("Loading models...")
-    nlp = spacy.load("en_core_web_sm", disable=["lemmatizer", "attribute_ruler", "tagger", "parser"])
+    nlp = spacy.load("en_core_web_sm", disable=["lemmatizer", "attribute_ruler", "parser"])
     nlp.add_pipe("sentencizer")  # lightweight sentence boundaries without full parser
     vader = SentimentIntensityAnalyzer()
     _nrc = NRCLex()  # one shared instance; per-review state is set via load_token_list()
@@ -120,9 +134,12 @@ def init_models(vad_lexicon_path: str = DEFAULT_VAD_LEXICON_PATH) -> None:
     # NRC-VAD Lexicon v2.1 (Mohammad, 2018) - real valence/arousal/dominance in [-1, 1].
     # Single-word entries only (44,728 of 54,801 rows); multi-word phrase entries are
     # skipped for now (marginal gain, added lookup complexity at this scale).
-    VAD_LOOKUP = load_vad_lexicon(vad_lexicon_path)
+    VAD_LOOKUP = load_vad_lexicon(
+        vad_lexicon_payload if vad_lexicon_payload is not None else vad_lexicon_path
+    )
     _loaded_vad_path = resolved_vad_path
-    print(f"Loaded NRC-VAD lexicon: {len(VAD_LOOKUP):,} single-word terms from {vad_lexicon_path}")
+    source_label = "serverless payload" if vad_lexicon_payload is not None else vad_lexicon_path
+    print(f"Loaded NRC-VAD lexicon: {len(VAD_LOOKUP):,} single-word terms from {source_label}")
 
 
 def init_transformers() -> None:

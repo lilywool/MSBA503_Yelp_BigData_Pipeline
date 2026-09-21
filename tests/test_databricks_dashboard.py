@@ -12,6 +12,22 @@ except ImportError:
 
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT / "databricks_integration" / "scripts"))
+sys.path.insert(0, str(REPO_ROOT / "pipeline"))
+
+
+class ServerlessSparkContractTests(unittest.TestCase):
+    def test_spark_connect_does_not_require_spark_context(self):
+        from spark_feature_engineering import _classic_spark_context
+
+        class ConnectSession:
+            @property
+            def sparkContext(self):
+                raise RuntimeError(
+                    "[JVM_ATTRIBUTE_NOT_SUPPORTED] sparkContext is not supported "
+                    "in Spark Connect"
+                )
+
+        self.assertIsNone(_classic_spark_context(ConnectSession()))
 
 
 @unittest.skipIf(SparkSession is None, "PySpark is not installed")
@@ -98,6 +114,62 @@ class DashboardTransformTests(unittest.TestCase):
             {"u1", "u2"},
         )
 
+    def test_google_drive_lexicons_are_staged_from_the_recursive_folder_tree(self):
+        from bronze_to_silver import _google_drive_lexicon_paths
+        from lexicon_cli import LEXICON_FILENAMES
+
+        class FakeReader:
+            def __init__(self):
+                self.options = {}
+                self.loads = []
+
+            def format(self, value):
+                self.format_name = value
+                return self
+
+            def option(self, key, value):
+                self.options[key] = value
+                return self
+
+            def load(self, value):
+                self.loads.append(value)
+                return self
+
+            def select(self, *columns):
+                self.columns = columns
+                return self
+
+            def collect(self):
+                filename = self.options["pathGlobFilter"]
+                return [
+                    {
+                        "path": f"gdrive://Yelp RAW Databricks/Lexicons/{filename}",
+                        "content": f"contents for {filename}\n".encode("utf-8"),
+                    }
+                ]
+
+        reader = FakeReader()
+        fake_spark = type("FakeSpark", (), {"read": reader})()
+        folder_url = "https://drive.google.com/drive/folders/example"
+
+        with _google_drive_lexicon_paths(
+            fake_spark,
+            folder_url=folder_url,
+            connection="yelp_google_drive",
+        ) as paths:
+            self.assertEqual(set(paths), set(LEXICON_FILENAMES))
+            staged = [Path(path) for path in paths.values()]
+            self.assertTrue(all(path.is_file() for path in staged))
+            self.assertEqual(
+                {path.name for path in staged},
+                set(LEXICON_FILENAMES.values()),
+            )
+        self.assertTrue(all(not path.exists() for path in staged))
+        self.assertEqual(reader.format_name, "binaryFile")
+        self.assertEqual(reader.options["databricks.connection"], "yelp_google_drive")
+        self.assertTrue(reader.options["recursiveFileLookup"])
+        self.assertEqual(reader.loads, [folder_url] * len(LEXICON_FILENAMES))
+
     def test_silver_and_gold_sample_arguments_are_independent(self):
         from bronze_to_silver import parse_args as parse_bronze_args
         from silver_to_gold import parse_args as parse_gold_args
@@ -119,6 +191,15 @@ class DashboardTransformTests(unittest.TestCase):
         )
         self.assertEqual(bronze.silver_sample_size, 25000)
         self.assertEqual(bronze.silver_sample_seed, 11)
+        drive = parse_bronze_args(
+            [
+                "--google-drive-folder-url", "https://drive.google.com/drive/folders/example",
+                "--google-drive-connection", "yelp_google_drive",
+            ]
+        )
+        self.assertIsNone(drive.input_volume)
+        self.assertIsNone(drive.lexicons_dir)
+        self.assertIsNone(drive.google_drive_lexicons_folder_url)
         self.assertEqual(gold.gold_sample_size, 5000)
         self.assertEqual(gold.gold_sample_seed, 29)
         self.assertEqual(effective_sample_size(50000, 25000), 25000)

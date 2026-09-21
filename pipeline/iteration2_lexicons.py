@@ -21,8 +21,14 @@ Each loader parses the lexicon file's actual column layout directly:
   * NRC Emotion Intensity: term -> {emotion: intensity}, straightforward TSV parse.
 """
 
-from pathlib import Path
+from io import BytesIO
 import pandas as pd
+
+
+def _tabular_source(source):
+    if isinstance(source, (bytes, bytearray)):
+        return BytesIO(bytes(source))
+    return source
 
 
 def load_worry_words(path: str) -> set:
@@ -30,7 +36,9 @@ def load_worry_words(path: str) -> set:
     least mildly worry/anxiety-associated per human annotation) - narrower
     than "any annotated word at all", to keep this a meaningful "worry word"
     flag rather than a blanket match."""
-    df = pd.read_csv(path, sep="\t", keep_default_na=False, na_values=[])
+    df = pd.read_csv(
+        _tabular_source(path), sep="\t", keep_default_na=False, na_values=[]
+    )
     df.columns = [c.strip() for c in df.columns]
     hits = df[df["MajorityLabel"].astype(float) >= 2]
     return set(hits["Term"].astype(str).str.lower())
@@ -43,7 +51,9 @@ def load_wcst(path: str) -> dict:
     abbreviation per column ("warmth (W)", "competence (C)", "sociability (S)",
     "trust (T)") - lowercasing alone leaves those suffixes in place, so the
     column name has to be split on " (" as well, not just lowercased."""
-    df = pd.read_csv(path, sep="\t", keep_default_na=False, na_values=[])
+    df = pd.read_csv(
+        _tabular_source(path), sep="\t", keep_default_na=False, na_values=[]
+    )
     df.columns = [c.strip().lower().split(" (")[0] for c in df.columns]
     return df.set_index("term")[["warmth", "competence", "sociability", "trust"]].to_dict("index")
 
@@ -54,23 +64,27 @@ def load_yelp_afflex(path: str) -> dict:
     variants (a real feature of this lexicon) - kept as distinct keys, matched
     only on an exact token basis like the rest of this pipeline's lexicon lookups."""
     rows = []
-    with open(path, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 2:
-                continue
-            term, score = parts[0], parts[1]
-            try:
-                rows.append((term, float(score)))
-            except ValueError:
-                continue
+    if isinstance(path, (bytes, bytearray)):
+        lines = bytes(path).decode("utf-8", errors="replace").splitlines()
+    else:
+        with open(path, encoding="utf-8", errors="replace") as stream:
+            lines = list(stream)
+    for line in lines:
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) < 2:
+            continue
+        term, score = parts[0], parts[1]
+        try:
+            rows.append((term, float(score)))
+        except ValueError:
+            continue
     return dict(rows)
 
 
 def load_nrc_intensity(path: str) -> dict:
     """term -> {emotion: intensity}."""
     df = pd.read_csv(
-        path,
+        _tabular_source(path),
         sep="\t",
         names=["term", "emotion", "score"],
         keep_default_na=False,
@@ -89,3 +103,13 @@ def load_all(worry_path: str, wcst_path: str, yelp_path: str, nrc_intensity_path
         "yelp": load_yelp_afflex(yelp_path),
         "nrc_intensity": load_nrc_intensity(nrc_intensity_path),
     }
+
+
+def load_all_from_payloads(payloads: dict[str, bytes]) -> dict:
+    """Parse executor-local byte payloads without filesystem or SparkContext APIs."""
+    return load_all(
+        worry_path=payloads["worry_path"],
+        wcst_path=payloads["wcst_path"],
+        yelp_path=payloads["yelp_path"],
+        nrc_intensity_path=payloads["nrc_intensity_path"],
+    )

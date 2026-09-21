@@ -14,7 +14,24 @@ dashboard-serving tables.
 
 ## Inputs already selected for this deployment
 
-Place these five JSON-lines files in one Google Drive folder:
+Use this Google Drive layout:
+
+```text
+Yelp RAW Databricks/
+|-- yelp_academic_dataset_business.json
+|-- yelp_academic_dataset_checkin.json
+|-- yelp_academic_dataset_review.json
+|-- yelp_academic_dataset_tip.json
+|-- yelp_academic_dataset_user.json
+`-- Lexicons/
+    |-- NRC-Emotion-Intensity-Lexicon-v1.txt
+    |-- NRC-VAD-Lexicon-v2.1.txt
+    |-- NRC-WCST-Lexicon-v1.0.txt
+    |-- worrywords-v1.txt
+    `-- Yelp-restaurant-reviews-AFFLEX-NEGLEX-unigrams.txt
+```
+
+The five JSON-lines files at the root are:
 
 ```text
 yelp_academic_dataset_business.json
@@ -27,23 +44,32 @@ yelp_academic_dataset_user.json
 Create a Unity Catalog Google Drive connection and supply the folder URL and
 connection name through the job parameters `google_drive_folder_url` and
 `google_drive_connection`. The task uses a filename filter and an explicit
-schema for each source; the raw files are not copied into the input Volume.
+schema for each source. It also recursively discovers the five exact lexicon
+filenames in the `Lexicons` subfolder, stages their bytes only for the duration
+of the run, and distributes those small payloads to serverless Spark workers.
+Neither the raw dataset nor
+the licensed lexicons are copied into Git or an input Volume.
 
-Upload the five licensed lexicon files documented in `lexicons/README.md` to:
+If the lexicons are ever moved to a different Drive folder, pass that folder's
+URL with `--google-drive-lexicons-folder-url`. The supplied Job template needs
+only the parent `Yelp RAW Databricks` URL.
+
+The maintained Job uses Databricks Free Edition serverless compute. Its shared
+Python environment is declared in `job_config.json` with environment version 5
+and these two dependencies from the connected Git folder:
 
 ```text
-/Volumes/workspace/default/yelp_academic_raw/_pipeline/lexicons
+-r /Workspace/Users/lwool@sandiego.edu/MSBA503_Yelp_BigData_Pipeline/databricks_integration/requirements-serverless.txt
+/Workspace/Users/lwool@sandiego.edu/MSBA503_Yelp_BigData_Pipeline
 ```
 
-Upload `databricks_integration/init_script.sh` to:
-
-```text
-/Volumes/workspace/default/yelp_academic_raw/_pipeline/init_script.sh
-```
-
-The init script installs the same pinned Python feature stack on every cluster
-node and downloads the two NLTK resources used by TextBlob. It does not install
-Spark NLP, PyTorch, or Hugging Face Transformers.
+The first installs the NLP libraries and spaCy model. The second installs this
+repository as the shared pipeline package. Databricks supplies Spark, pandas,
+NumPy, and PyArrow; the dependency file deliberately does not replace those
+runtime-coupled packages. Grammar tags reuse the loaded spaCy document, so the
+serverless tasks require neither an init script nor downloaded NLTK corpora.
+`init_script.sh` remains only for classic/full-workspace deployments and is not
+referenced by the maintained Free Edition Job.
 
 ## Task contract
 
@@ -71,14 +97,16 @@ This task owns all feature-engine and scaling choices:
   standard family except `transformers`.
 - `--partitions` and `--arrow-batch-size` control Spark distribution and the
   bounded pandas batch size.
-- `--lexicons-dir` or the individual lexicon overrides identify the licensed
-  feature resources.
+- With a Google Drive source, the five licensed lexicons are discovered in the
+  same folder tree automatically. `--google-drive-lexicons-folder-url` can
+  point to a different Drive folder. `--lexicons-dir` and the five individual
+  overrides remain available only for alternate non-Drive deployments.
 
-The default init script installs the standard spaCy, VADER, NRC, TextBlob,
-NLTK, pandas, NumPy, and Arrow stack. Transformer selection is explicit and
-requires attaching `requirements-transformers.txt` to this task's cluster (or
-using an equivalent compatible ML runtime). No external AI/API integration is
-part of this pipeline.
+The serverless environment installs the standard spaCy, VADER, NRC, TextBlob,
+and NLTK feature libraries while retaining the runtime's own pandas, NumPy,
+Arrow, and PySpark packages. Transformer selection is explicit and requires a
+separately tested compatible serverless environment; it is not enabled in the
+supplied Free Edition Job template.
 
 ### 2. `silver_to_gold_yelp`
 
@@ -174,29 +202,32 @@ Jobs UI, edit the job parameter key/value pairs or use **Run now with different
 parameters**; the task JSON resolves them into script arguments.
 
 1. Push the public repository and connect it to the Databricks workspace.
-2. Create the Google Drive connection and upload only the small lexicon and
-   initialization resources to the documented Volume paths.
+2. Create the Google Drive connection. Confirm the five JSON files are at the
+   `Yelp RAW Databricks` root and the five lexicons are in its `Lexicons`
+   subfolder under the exact filenames shown above.
 3. In **Workflows > Jobs**, create a job that uses this GitHub repository and
    branch `main` as its Git source.
 4. Add the three Python script tasks in the order shown above. Their relative
    paths and parameters are in `job_config.json`; Git paths do not begin with
    `/` or `./`.
-5. Use a classic multi-node job cluster, select an available memory-oriented
-   node type, and attach the Volume-backed init script. The current feature
-   distributor uses the classic Spark context for Python files, broadcasts, and
-   SparkFiles, so this configuration is intentionally not serverless.
+5. Choose **Serverless** compute. Assign all three tasks the shared environment
+   key `yelp_pipeline`, Standard environment version `5`, and the two dependencies
+   shown above. Do not add a classic cluster, node type, or init script.
 6. Set the job parameters before each run. `silver_sample_size` controls the
    bounded Bronze/Silver population; `gold_sample_size` independently controls
    the row-level Gold/dashboard population. Start with 25,000 and 5,000,
    respectively, and inspect table sizes plus the audit before increasing them.
 
 The JSON file is a Jobs API-style template. Replace the Google Drive folder URL
-and node type placeholders before importing or submitting it. The scripts also
-retain `--input-volume` as an alternative source for classic/full-workspace
-deployments.
+placeholder before importing or submitting it. The maintained
+Job uses Google Drive for both raw inputs and lexicons. The script retains
+`--input-volume` only as an explicit alternative for other full-workspace
+deployments; it never falls back to a Volume implicitly.
 
 Databricks documentation used for this layout:
 
 - [Use Git with Lakeflow Jobs](https://docs.databricks.com/aws/en/jobs/git)
 - [Python script task for jobs](https://docs.databricks.com/aws/en/jobs/tasks/python-script)
-- [Unity Catalog Volume paths](https://docs.databricks.com/aws/en/volumes/volume-files)
+- [Ingest files from Google Drive](https://docs.databricks.com/gcp/en/ingestion/google-drive)
+- [Serverless compute limitations](https://docs.databricks.com/aws/en/compute/serverless/limitations)
+- [Serverless environment dependencies](https://docs.databricks.com/aws/en/compute/serverless/dependencies)

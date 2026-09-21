@@ -19,6 +19,7 @@ every run, and every run is logged, pass or fail.
     lexicon-based one, both genuinely computed.
 """
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -27,7 +28,10 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent))
 import real_feature_engineering as rfe
 import iteration2_features as it2
-from iteration2_lexicons import load_all as load_iteration2_lexicons
+from iteration2_lexicons import (
+    load_all as load_iteration2_lexicons,
+    load_all_from_payloads,
+)
 
 # rfe.GENERATED_COLUMNS is real_feature_engineering's "strip these from input,
 # never trust old values" list - it deliberately INCLUDES 4 legacy column names
@@ -79,6 +83,7 @@ DEFAULT_FEATURE_GROUPS = tuple(group for group in FEATURE_GROUPS if group != "tr
 ALL_GENERATED_COLUMNS = list(dict.fromkeys(rfe.GENERATED_COLUMNS + it2.ITERATION2_COLUMNS))
 
 _lexicons = None  # the four specialized lexicons, loaded once per worker via init_models()
+_lexicon_payload_signature = None
 
 
 def normalize_feature_groups(feature_groups=None, use_transformers: bool = False) -> tuple[str, ...]:
@@ -102,9 +107,10 @@ def output_columns_for(feature_groups=None, use_transformers: bool = False) -> l
     return [column for column in OUTPUT_COLUMNS if column in selected]
 
 
-def init_models(vad_lexicon_path: str, worry_path: str = None, wcst_path: str = None,
+def init_models(vad_lexicon_path: str = None, worry_path: str = None, wcst_path: str = None,
                  yelp_path: str = None, nrc_intensity_path: str = None,
-                 preloaded_lexicons: dict = None) -> None:
+                 preloaded_lexicons: dict = None,
+                 lexicon_payloads: dict[str, bytes] = None) -> None:
     """Loads BOTH the core models (spaCy/VADER/NRCLex/VAD) and the four
     specialized lexicons. Call once per worker/process, exactly like
     real_feature_engineering.init_models().
@@ -117,11 +123,25 @@ def init_models(vad_lexicon_path: str, worry_path: str = None, wcst_path: str = 
     model objects, not broadcastable plain data, so every worker loads its
     own. See spark_feature_engineering.py's `run()` for the broadcast path.
     """
-    global _lexicons
-    rfe.init_models(vad_lexicon_path=vad_lexicon_path)
+    global _lexicons, _lexicon_payload_signature
+    if lexicon_payloads is not None:
+        signature = tuple(
+            (key, hashlib.sha256(value).hexdigest())
+            for key, value in sorted(lexicon_payloads.items())
+        )
+        rfe.init_models(
+            vad_lexicon_path=vad_lexicon_path,
+            vad_lexicon_payload=lexicon_payloads["vad_lexicon_path"],
+        )
+        if _lexicons is None or _lexicon_payload_signature != signature:
+            _lexicons = load_all_from_payloads(lexicon_payloads)
+            _lexicon_payload_signature = signature
+    else:
+        rfe.init_models(vad_lexicon_path=vad_lexicon_path)
     if preloaded_lexicons is not None:
         _lexicons = preloaded_lexicons
-    else:
+        _lexicon_payload_signature = None
+    elif lexicon_payloads is None:
         _lexicons = load_iteration2_lexicons(worry_path, wcst_path, yelp_path, nrc_intensity_path)
 
 
@@ -179,7 +199,7 @@ def process_dataframe(df: pd.DataFrame, text_col: str = "raw_review",
             row.update(rfe.transformer_features(text))
 
         if "grammar" in groups:
-            row.update(it2.grammar_features(text))
+            row.update(it2.grammar_features(text, doc=doc))
         if "domain-lexicons" in groups:
             specialized = it2.specialized_lexicon_features(text, _lexicons)
             row.update(specialized)

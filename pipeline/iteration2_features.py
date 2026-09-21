@@ -31,13 +31,23 @@ ITERATION2_COLUMNS = [
 ]
 
 
-def grammar_features(text: str) -> dict:
-    """POS composition + subjectivity + type-token ratio (TextBlob)."""
+def grammar_features(text: str, doc=None) -> dict:
+    """POS composition, subjectivity, and type-token ratio.
+
+    Spark workers reuse the spaCy document already created for every review;
+    this avoids a second tagger pass and removes the need for separately
+    downloaded NLTK corpora on serverless compute. TextBlob remains the
+    subjectivity analyzer.
+    """
     blob = TextBlob(text)
-    tags = blob.tags
+    tags = (
+        [token.tag_ for token in doc if not token.is_space]
+        if doc is not None
+        else [tag for _, tag in blob.tags]
+    )
     total = len(tags) if tags else 1
     counts = {"NN": 0, "VB": 0, "JJ": 0, "RB": 0}
-    for _, tag in tags:
+    for tag in tags:
         key = tag[:2]
         if key in counts:
             counts[key] += 1

@@ -43,7 +43,7 @@ class DatabricksContractTests(unittest.TestCase):
         self.assertIn("--google-drive-connection", parameters)
         self.assertIn("--silver-sample-size", parameters)
         self.assertIn("{{job.parameters.silver_sample_size}}", parameters)
-        self.assertIn("--lexicons-dir", parameters)
+        self.assertNotIn("--lexicons-dir", parameters)
         self.assertIn("--partitions", parameters)
 
         gold_parameters = tasks["silver_to_gold_yelp"]["spark_python_task"]["parameters"]
@@ -60,14 +60,46 @@ class DatabricksContractTests(unittest.TestCase):
         defaults = {item["name"]: item["default"] for item in config["parameters"]}
         self.assertEqual(defaults["silver_sample_size"], "25000")
         self.assertEqual(defaults["gold_sample_size"], "5000")
-        self.assertTrue(
-            config["job_clusters"][0]["new_cluster"]["spark_version"].startswith("17.3")
+        serialized = json.dumps(config)
+        self.assertNotIn("/Volumes/", serialized)
+        self.assertNotIn("job_clusters", config)
+        self.assertNotIn("job_cluster_key", serialized)
+        self.assertEqual(config["format"], "MULTI_TASK")
+
+        environments = {
+            item["environment_key"]: item["spec"] for item in config["environments"]
+        }
+        self.assertEqual(set(environments), {"yelp_pipeline"})
+        serverless = environments["yelp_pipeline"]
+        self.assertEqual(serverless["environment_version"], "5")
+        self.assertEqual(
+            serverless["dependencies"],
+            [
+                "-r /Workspace/Users/lwool@sandiego.edu/"
+                "MSBA503_Yelp_BigData_Pipeline/"
+                "databricks_integration/requirements-serverless.txt",
+                "/Workspace/Users/lwool@sandiego.edu/"
+                "MSBA503_Yelp_BigData_Pipeline",
+            ],
         )
 
         for task in tasks.values():
+            self.assertEqual(task["environment_key"], "yelp_pipeline")
             python_file = task["spark_python_task"]["python_file"]
             self.assertEqual(task["spark_python_task"]["source"], "GIT")
             self.assertTrue((REPO_ROOT / python_file).is_file(), python_file)
+
+    def test_serverless_dependencies_do_not_replace_runtime_core_packages(self):
+        requirements = (
+            REPO_ROOT
+            / "databricks_integration"
+            / "requirements-serverless.txt"
+        ).read_text(encoding="utf-8").lower()
+        for package in ("pyspark", "pandas", "numpy", "pyarrow"):
+            self.assertNotRegex(requirements, rf"(?m)^\s*{package}\s*[=<>~]")
+        self.assertIn("spacy==3.8.16", requirements)
+        self.assertIn("en_core_web_sm-3.8.0", requirements)
+        self.assertTrue((REPO_ROOT / "pyproject.toml").is_file())
 
     def test_unity_catalog_names_are_restricted(self):
         self.assertEqual(

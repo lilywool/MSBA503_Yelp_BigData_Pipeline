@@ -82,15 +82,22 @@ def _generated_schema(use_transformers: bool, feature_groups=None) -> StructType
     return StructType(fields)
 
 
-def make_mapper(text_col: str, vad_lexicon_filename: str, lexicons_bc,
-                use_transformers: bool, reference_date, feature_groups=None):
+def make_mapper(
+    text_col: str,
+    vad_lexicon_filename: str | None,
+    lexicons_bc,
+    use_transformers: bool,
+    reference_date,
+    feature_groups=None,
+    lexicon_payloads: dict[str, bytes] | None = None,
+):
     """Returns the function passed to mapInPandas.
 
     Each Spark task calls this with an iterator of pandas batches.
     spaCy/VADER/NRCLex/VAD are initialized worker-locally and reused when the
-    Python worker survives across tasks; the four specialized lexicons come from `lexicons_bc`
-    (a Spark broadcast variable set up once in run()) instead of being
-    re-parsed from disk here.
+    Python worker survives across tasks. Classic Spark uses ``lexicons_bc``;
+    Spark Connect/serverless receives the five small lexicons as exact byte
+    payloads in the mapper closure.
 
     `reference_date` is computed ONCE at the driver (see run()) from the full
     dataset and passed in here as a plain closed-over value - every partition
@@ -102,11 +109,19 @@ def make_mapper(text_col: str, vad_lexicon_filename: str, lexicons_bc,
     prevent.
     """
     def _map(batches):
-        # Spark distributes the VAD file with addFile(); resolve its executor-local
-        # path here rather than closing over the driver's temporary path.
-        vad_lexicon_path = SparkFiles.get(vad_lexicon_filename)
-        cfe.init_models(vad_lexicon_path=vad_lexicon_path,
-                        preloaded_lexicons=lexicons_bc.value)
+        if lexicon_payloads is not None:
+            # Spark Connect/serverless has no SparkContext or SparkFiles. The
+            # five licensed resources are small enough to travel once with the
+            # Python closure and are parsed once per reused Python worker.
+            cfe.init_models(lexicon_payloads=lexicon_payloads)
+        else:
+            # Classic Spark distributes the VAD file with addFile(); resolve its
+            # executor-local path rather than closing over a driver path.
+            vad_lexicon_path = SparkFiles.get(vad_lexicon_filename)
+            cfe.init_models(
+                vad_lexicon_path=vad_lexicon_path,
+                preloaded_lexicons=lexicons_bc.value,
+            )
         if use_transformers:
             cfe.init_transformers()
         out_cols = cfe.output_columns_for(feature_groups, use_transformers)
@@ -124,6 +139,22 @@ def make_mapper(text_col: str, vad_lexicon_filename: str, lexicons_bc,
             # declared schema, not just the newly-computed columns.
             yield result[input_cols + out_cols]
     return _map
+
+
+def _classic_spark_context(spark):
+    """Return SparkContext for classic Spark, or None for Spark Connect/serverless."""
+    try:
+        return spark.sparkContext
+    except AttributeError:
+        return None
+    except Exception as exc:
+        message = str(exc)
+        if (
+            "JVM_ATTRIBUTE_NOT_SUPPORTED" in message
+            or "not supported in Spark Connect" in message
+        ):
+            return None
+        raise
 
 
 def _stage_lexicons(spark, lexicon_paths: dict) -> tuple[dict, dict]:
@@ -223,41 +254,48 @@ def apply_features(spark, sdf, text_col: str, lexicon_paths: dict,
                    use_transformers: bool, num_partitions: int | None = None,
                    feature_groups=None):
     """Apply the canonical feature payload to an already prepared Spark frame."""
-    # Ship this repo's pipeline modules to every executor. In local-mode testing
-    # workers happen to inherit the driver's filesystem/PYTHONPATH, but that's
-    # not true on a real cluster (Databricks workers are separate machines) -
-    # addPyFile is the portable way to make `import corrected_feature_engineering`
-    # (and everything it imports) succeed on every worker either way.
-    pipeline_dir = Path(__file__).parent
-    for fname in ("real_feature_engineering.py", "iteration2_features.py",
-                  "iteration2_lexicons.py", "corrected_feature_engineering.py"):
-        module_path = pipeline_dir / fname
-        # A source checkout has physical sibling files. An EMR submission uses
-        # --py-files pipeline_modules.zip instead, so those siblings need not
-        # exist beside the localized entry-point script.
-        if module_path.exists():
-            spark.sparkContext.addPyFile(str(module_path))
+    spark_context = _classic_spark_context(spark)
+    if spark_context is not None:
+        # Classic Spark workers receive source modules through addPyFile. The
+        # serverless Job installs the repository itself as a Python project.
+        pipeline_dir = Path(__file__).parent
+        for fname in ("real_feature_engineering.py", "iteration2_features.py",
+                      "iteration2_lexicons.py", "corrected_feature_engineering.py"):
+            module_path = pipeline_dir / fname
+            if module_path.exists():
+                spark_context.addPyFile(str(module_path))
 
     if text_col not in sdf.columns:
         raise ValueError(
             f"Text column {text_col!r} is missing. Available columns: {sdf.columns}"
         )
 
-    # Stage all files through Spark so S3/DBFS sources become ordinary local
-    # files before pandas/open-based lexicon parsing.
-    staged_paths, staged_filenames = _stage_lexicons(spark, lexicon_paths)
-
-    # Load the 4 specialized lexicons ONCE here at the driver and broadcast the
-    # parsed result (dicts/sets, a few MB total) to every executor, instead of
-    # every partition re-reading and re-parsing these same static files from
-    # DBFS/S3. See make_mapper()'s docstring for why VAD isn't included here.
-    lexicons = il.load_all(
-        worry_path=staged_paths["worry_path"],
-        wcst_path=staged_paths["wcst_path"],
-        yelp_path=staged_paths["yelp_path"],
-        nrc_intensity_path=staged_paths["nrc_intensity_path"],
-    )
-    lexicons_bc = spark.sparkContext.broadcast(lexicons)
+    staged_filenames = None
+    lexicons_bc = None
+    lexicon_payloads = None
+    if spark_context is None:
+        # Google Drive files have already been materialized as temporary local
+        # files by the Databricks entry point. Close over their exact bytes so
+        # Spark Connect can distribute them without SparkContext/SparkFiles.
+        lexicon_payloads = {}
+        for key, source in lexicon_paths.items():
+            path = Path(source)
+            if not path.is_file():
+                raise ValueError(
+                    "Serverless lexicons must be driver-local files before feature "
+                    f"distribution; not found: {source}"
+                )
+            lexicon_payloads[key] = path.read_bytes()
+    else:
+        # Classic Spark retains its executor-safe SparkFiles + broadcast path.
+        staged_paths, staged_filenames = _stage_lexicons(spark, lexicon_paths)
+        lexicons = il.load_all(
+            worry_path=staged_paths["worry_path"],
+            wcst_path=staged_paths["wcst_path"],
+            yelp_path=staged_paths["yelp_path"],
+            nrc_intensity_path=staged_paths["nrc_intensity_path"],
+        )
+        lexicons_bc = spark_context.broadcast(lexicons)
 
     # Never trust old feature values - drop and fully regenerate every
     # pipeline-owned column from raw text, same rule as the CLI pipelines.
@@ -282,11 +320,16 @@ def apply_features(spark, sdf, text_col: str, lexicon_paths: dict,
     )
     mapper = make_mapper(
         text_col,
-        staged_filenames["vad_lexicon_path"],
+        (
+            staged_filenames["vad_lexicon_path"]
+            if staged_filenames is not None
+            else None
+        ),
         lexicons_bc,
         use_transformers,
         reference_date,
         resolved_groups,
+        lexicon_payloads=lexicon_payloads,
     )
     result = sdf.mapInPandas(mapper, schema=schema)
     return result

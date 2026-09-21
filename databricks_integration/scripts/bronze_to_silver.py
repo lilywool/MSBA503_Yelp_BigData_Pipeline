@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from pyspark import StorageLevel
 from pyspark.sql import SparkSession
@@ -17,7 +19,11 @@ sys.path.insert(0, str(PIPELINE_DIR))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bronze_json_to_parquet import DATASETS, join_path  # noqa: E402
-from lexicon_cli import add_lexicon_args, resolve_lexicon_paths  # noqa: E402
+from lexicon_cli import (  # noqa: E402
+    LEXICON_FILENAMES,
+    add_lexicon_args,
+    resolve_lexicon_paths,
+)
 from spark_feature_engineering import apply_features, build_silver_frame, cfe  # noqa: E402
 from spark_validate import validate_spark_at_scale  # noqa: E402
 from common import (  # noqa: E402
@@ -30,13 +36,9 @@ from common import (  # noqa: E402
 )
 
 
-DEFAULT_INPUT_VOLUME = "/Volumes/workspace/default/yelp_academic_raw"
-DEFAULT_LEXICON_DIR = "/Volumes/workspace/default/yelp_academic_raw/_pipeline/lexicons"
-
-
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    source = parser.add_mutually_exclusive_group()
+    source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
         "--input-volume",
         default=None,
@@ -51,6 +53,15 @@ def parse_args(argv=None):
         "--google-drive-connection",
         default=None,
         help="Unity Catalog Google Drive connection used with --google-drive-folder-url.",
+    )
+    parser.add_argument(
+        "--google-drive-lexicons-folder-url",
+        default=None,
+        help=(
+            "Optional Google Drive folder containing the five licensed lexicons. "
+            "Defaults to --google-drive-folder-url, so one Drive folder may contain "
+            "both the Yelp JSON files and lexicons."
+        ),
     )
     parser.add_argument("--catalog", default="workspace")
     parser.add_argument("--schema", default="default")
@@ -88,7 +99,6 @@ def parse_args(argv=None):
         ),
     )
     add_lexicon_args(parser)
-    parser.set_defaults(lexicons_dir=DEFAULT_LEXICON_DIR)
     args = parser.parse_args(argv)
     if args.google_drive_folder_url and not args.google_drive_connection:
         parser.error(
@@ -98,9 +108,85 @@ def parse_args(argv=None):
         parser.error(
             "--google-drive-folder-url is required with --google-drive-connection"
         )
-    if not args.input_volume and not args.google_drive_folder_url:
-        args.input_volume = DEFAULT_INPUT_VOLUME
+    if args.google_drive_lexicons_folder_url and not args.google_drive_folder_url:
+        parser.error(
+            "--google-drive-lexicons-folder-url requires --google-drive-folder-url"
+        )
     return args
+
+
+def _has_explicit_lexicon_paths(args) -> bool:
+    return any(
+        getattr(args, name, None)
+        for name in (
+            "lexicons_dir",
+            "vad_lexicon",
+            "worry_lexicon",
+            "wcst_lexicon",
+            "yelp_lexicon",
+            "nrc_intensity_lexicon",
+        )
+    )
+
+
+@contextmanager
+def _google_drive_lexicon_paths(
+    spark,
+    *,
+    folder_url: str,
+    connection: str,
+):
+    """Materialize five small Drive-hosted lexicons for feature workers.
+
+    The Google Drive connector is a Spark data source, while the feature loaders
+    need ordinary files. Reading each exact filename as ``binaryFile`` preserves
+    its bytes; the temporary driver copies remain alive until all Silver actions
+    have completed. ``apply_features`` then distributes them to executors through
+    the serverless byte-payload path (or SparkFiles on classic Spark).
+    """
+    with TemporaryDirectory(prefix="yelp_drive_lexicons_") as temp_dir:
+        paths = {}
+        for key, filename in LEXICON_FILENAMES.items():
+            matches = (
+                spark.read.format("binaryFile")
+                .option("databricks.connection", connection)
+                .option("pathGlobFilter", filename)
+                .option("recursiveFileLookup", True)
+                .load(folder_url)
+                .select("path", "content")
+                .collect()
+            )
+            if len(matches) != 1:
+                found = [row["path"] for row in matches]
+                raise ValueError(
+                    f"Expected exactly one Google Drive lexicon named {filename!r}; "
+                    f"found {len(matches)}: {found}"
+                )
+            target = Path(temp_dir) / filename
+            target.write_bytes(bytes(matches[0]["content"]))
+            paths[key] = str(target)
+        yield paths
+
+
+@contextmanager
+def _feature_lexicon_paths(spark, args):
+    """Resolve explicit files, or stage all five from the configured Drive folder."""
+    if _has_explicit_lexicon_paths(args):
+        yield resolve_lexicon_paths(args)
+        return
+    if args.google_drive_folder_url:
+        with _google_drive_lexicon_paths(
+            spark,
+            folder_url=(
+                args.google_drive_lexicons_folder_url
+                or args.google_drive_folder_url
+            ),
+            connection=args.google_drive_connection,
+        ) as paths:
+            yield paths
+        return
+    # Non-Drive deployments must provide --lexicons-dir or all five overrides.
+    yield resolve_lexicon_paths(args)
 
 
 def _read_json(
@@ -207,6 +293,20 @@ def main(argv=None) -> int:
             if args.google_drive_folder_url
             else {"kind": "volume", "path": args.input_volume}
         ),
+        "lexicon_source": (
+            {
+                "kind": "explicit_paths",
+            }
+            if _has_explicit_lexicon_paths(args)
+            else {
+                "kind": "google_drive",
+                "folder_url": (
+                    args.google_drive_lexicons_folder_url
+                    or args.google_drive_folder_url
+                ),
+                "connection": args.google_drive_connection,
+            }
+        ),
         "bronze_rows": {},
         "silver_sample_size": args.silver_sample_size,
         "silver_sample_seed": args.silver_sample_seed,
@@ -278,40 +378,41 @@ def main(argv=None) -> int:
         use_transformers = bool(
             args.nlp_components and "transformers" in args.nlp_components
         )
-        silver = apply_features(
-            spark=spark,
-            sdf=joined,
-            text_col="raw_review",
-            lexicon_paths=resolve_lexicon_paths(args),
-            use_transformers=use_transformers,
-            num_partitions=args.partitions,
-            feature_groups=args.nlp_components,
-        ).persist(StorageLevel.MEMORY_AND_DISK)
-        try:
-            require_columns(
-                silver,
-                {"review_id", "business_id", "user_id", "raw_review", "review_date"},
-                "Silver reviews",
-            )
-            silver_rows = require_nonempty(silver, "Silver reviews")
-            expected_silver_rows = metrics["bronze_rows"]["review"]
-            if silver_rows != expected_silver_rows:
-                raise ValueError(
-                    "Silver row count does not match the selected Bronze review count: "
-                    f"{silver_rows} != {expected_silver_rows}"
+        with _feature_lexicon_paths(spark, args) as lexicon_paths:
+            silver = apply_features(
+                spark=spark,
+                sdf=joined,
+                text_col="raw_review",
+                lexicon_paths=lexicon_paths,
+                use_transformers=use_transformers,
+                num_partitions=args.partitions,
+                feature_groups=args.nlp_components,
+            ).persist(StorageLevel.MEMORY_AND_DISK)
+            try:
+                require_columns(
+                    silver,
+                    {"review_id", "business_id", "user_id", "raw_review", "review_date"},
+                    "Silver reviews",
                 )
-            metrics["silver_rows"] = silver_rows
-            metrics["validation"] = validate_spark_at_scale(
-                silver, text_col="raw_review"
-            )
-            metrics["silver_table"] = table_name(
-                args.catalog, args.schema, f"{args.table_prefix}_silver_reviews"
-            )
+                silver_rows = require_nonempty(silver, "Silver reviews")
+                expected_silver_rows = metrics["bronze_rows"]["review"]
+                if silver_rows != expected_silver_rows:
+                    raise ValueError(
+                        "Silver row count does not match the selected Bronze review count: "
+                        f"{silver_rows} != {expected_silver_rows}"
+                    )
+                metrics["silver_rows"] = silver_rows
+                metrics["validation"] = validate_spark_at_scale(
+                    silver, text_col="raw_review"
+                )
+                metrics["silver_table"] = table_name(
+                    args.catalog, args.schema, f"{args.table_prefix}_silver_reviews"
+                )
 
-            write_delta_table(silver, metrics["silver_table"], args.mode)
-        finally:
-            silver.unpersist()
-            selected_reviews.unpersist()
+                write_delta_table(silver, metrics["silver_table"], args.mode)
+            finally:
+                silver.unpersist()
+                selected_reviews.unpersist()
 
         append_audit(spark, audit_table, "bronze_to_silver", "succeeded", metrics)
         print(f"Bronze and Silver tables are ready. Silver: {metrics['silver_table']}")

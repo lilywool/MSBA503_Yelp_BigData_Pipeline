@@ -35,7 +35,7 @@
   "tasks": [
     {
       "task_key": "bronze_to_silver_yelp",
-      "job_cluster_key": "yelp_pipeline_cluster",
+      "environment_key": "yelp_pipeline",
       "spark_python_task": {
         "python_file": "databricks_integration/scripts/bronze_to_silver.py",
         "source": "GIT",
@@ -45,7 +45,6 @@
           "--catalog", "workspace",
           "--schema", "default",
           "--table-prefix", "yelp",
-          "--lexicons-dir", "/Volumes/workspace/default/yelp_academic_raw/_pipeline/lexicons",
           "--partitions", "192",
           "--arrow-batch-size", "5000",
           "--silver-sample-size", "{{job.parameters.silver_sample_size}}",
@@ -65,7 +64,7 @@
     },
     {
       "task_key": "silver_to_gold_yelp",
-      "job_cluster_key": "yelp_pipeline_cluster",
+      "environment_key": "yelp_pipeline",
       "depends_on": [
         { "task_key": "bronze_to_silver_yelp" }
       ],
@@ -90,7 +89,7 @@
     },
     {
       "task_key": "data_science_dashboard_yelp",
-      "job_cluster_key": "yelp_pipeline_cluster",
+      "environment_key": "yelp_pipeline",
       "depends_on": [
         { "task_key": "silver_to_gold_yelp" }
       ],
@@ -108,34 +107,17 @@
       "timeout_seconds": 0
     }
   ],
-  "job_clusters": [
+  "environments": [
     {
-      "job_cluster_key": "yelp_pipeline_cluster",
-      "new_cluster": {
-        "spark_version": "17.3.x-scala2.13",
-        "node_type_id": "REPLACE_WITH_A_MEMORY_OPTIMIZED_NODE_TYPE",
-        "driver_node_type_id": "REPLACE_WITH_A_MEMORY_OPTIMIZED_NODE_TYPE",
-        "autoscale": {
-          "min_workers": 2,
-          "max_workers": 4
-        },
-        "spark_conf": {
-          "spark.sql.execution.arrow.pyspark.enabled": "true",
-          "spark.sql.execution.arrow.maxRecordsPerBatch": "5000",
-          "spark.task.cpus": "1"
-        },
-        "spark_env_vars": {
-          "NLTK_DATA": "/local_disk0/nltk_data",
-          "PYSPARK_PYTHON": "/databricks/python/bin/python"
-        },
-        "init_scripts": [
-          {
-            "volumes": {
-              "destination": "/Volumes/workspace/default/yelp_academic_raw/_pipeline/init_script.sh"
-            }
-          }
+      "environment_key": "yelp_pipeline",
+      "spec": {
+        "environment_version": "5",
+        "dependencies": [
+          "-r /Workspace/Users/lwool@sandiego.edu/MSBA503_Yelp_BigData_Pipeline/databricks_integration/requirements-serverless.txt",
+          "/Workspace/Users/lwool@sandiego.edu/MSBA503_Yelp_BigData_Pipeline"
         ]
       }
     }
-  ]
+  ],
+  "format": "MULTI_TASK"
 }

@@ -54,6 +54,17 @@ class LiteralNullLexiconTests(unittest.TestCase):
             self.assertEqual(wcst["null"]["trust"], 0.4)
             self.assertEqual(intensity["null"]["fear"], 0.75)
 
+            # Databricks serverless distributes the same resources as exact
+            # byte payloads rather than through SparkFiles.
+            vad_bytes = load_vad_lexicon(vad_path.read_bytes())
+            worry_bytes = load_worry_words(worry_path.read_bytes())
+            wcst_bytes = load_wcst(wcst_path.read_bytes())
+            intensity_bytes = load_nrc_intensity(intensity_path.read_bytes())
+            self.assertEqual(vad_bytes["null"]["valence"], 0.1)
+            self.assertIn("null", worry_bytes)
+            self.assertEqual(wcst_bytes["null"]["trust"], 0.4)
+            self.assertEqual(intensity_bytes["null"]["fear"], 0.75)
+
 
 if __name__ == "__main__":
     unittest.main()

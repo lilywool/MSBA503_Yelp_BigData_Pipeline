@@ -24,6 +24,8 @@ in [docs/MSBA 503 Yelp Analytics Dashboard.pdf](<docs/MSBA 503 Yelp Analytics Da
 ### 2026 upgrade: Databricks
 
 The current implementation moves the production-shaped pathway to Databricks:
+the supplied Job runs on Free Edition serverless compute and keeps the raw Yelp
+files plus licensed lexicons in the authenticated Google Drive source tree.
 
 ```text
 Yelp JSON files in Google Drive
@@ -52,8 +54,9 @@ Databricks Streamlit App
 
 Each run makes a small set of deliberate choices:
 
-- **Source:** read the five raw Yelp files from an authorized Google Drive
-  folder, while keeping code and licensed lexicons in their governed locations.
+- **Source:** read the five raw Yelp files and the licensed lexicons from an
+  authorized Google Drive folder tree while keeping code in the connected Git
+  repository. The dataset and lexicon contents are never committed.
 - **Workload:** choose how many reviews reach Silver and receive the selected
   feature engineering.
 - **Features:** run the complete standard NLP stack or select only the
@@ -106,7 +109,7 @@ families. The default remains the complete non-transformer feature set.
 
 ```text
 pipeline/                    canonical feature, ingestion, validation, and audit modules
-databricks_integration/      three job tasks, cluster setup, outputs, and dashboard app
+databricks_integration/      three serverless job tasks, environment, outputs, and dashboard app
 aws_emr/                     maintained AWS EMR deployment path
 dashboard/                   local dashboard-data compatibility utility
 archival/                    curated coursework context and unchanged team notebook
@@ -165,8 +168,8 @@ tests, and any skipped test. A genuine pass ends with:
 GENUINE PASS: N tests executed; 0 failures, 0 errors, 0 skips.
 ```
 
-The current pinned WSL2 verification completed 16 tests with no failures, errors,
-or skips on 2026-09-20. Corrected local-versus-Spark parity also passed on two
+The current pinned WSL2 verification completed 19 tests with no failures, errors,
+or skips on 2026-09-21. Corrected local-versus-Spark parity also passed on two
 disjoint 1,500-row slices across all 68 expected feature columns. The exact
 environment, commands, evidence boundary, implementation architecture, and
 Databricks task parameters are consolidated in the
@@ -181,7 +184,7 @@ Databricks task parameters are consolidated in the
 - [x] Three-task Databricks job implementation
 - [x] Delta audit and dashboard-serving contracts
 - [x] Deployable Databricks Streamlit app
-- [ ] Databricks cluster canary recorded in `yelp_pipeline_audit`
+- [ ] Databricks serverless canary recorded in `yelp_pipeline_audit`
 - [ ] Full 8.6-million-review Databricks run
 - [ ] Dashboard app deployed and share URL recorded
 

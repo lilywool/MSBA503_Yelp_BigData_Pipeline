@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yelp-bigdata-pipeline"
+version = "1.0.0"
+description = "Distributed Yelp review feature engineering for EMR and Databricks"
+requires-python = ">=3.11,<3.13"
+
+[tool.setuptools]
+package-dir = {"" = "pipeline"}
+py-modules = [
+  "bronze_json_to_parquet",
+  "corrected_feature_engineering",
+  "iteration2_features",
+  "iteration2_lexicons",
+  "lexicon_cli",
+  "parity_compare",
+  "real_feature_engineering",
+  "run_logger",
+  "spark_feature_engineering",
+  "spark_validate",
+]
