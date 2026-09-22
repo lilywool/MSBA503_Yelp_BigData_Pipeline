@@ -34,6 +34,13 @@ _ARG_TO_KEY = [
 ]
 
 
+def join_resource_path(root: str, filename: str) -> str:
+    """Join filesystem and URI roots without collapsing ``scheme://``."""
+    if "://" in root:
+        return f"{root.rstrip('/')}/{filename}"
+    return str(Path(root) / filename)
+
+
 def add_lexicon_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--lexicons-dir", default=None,
@@ -59,7 +66,10 @@ def resolve_lexicon_paths(args: argparse.Namespace) -> dict:
         if explicit:
             paths[key] = explicit
         elif args.lexicons_dir:
-            paths[key] = str(Path(args.lexicons_dir) / LEXICON_FILENAMES[key])
+            paths[key] = join_resource_path(
+                args.lexicons_dir,
+                LEXICON_FILENAMES[key],
+            )
         else:
             missing.append(f"--{arg_name.replace('_', '-')}")
 

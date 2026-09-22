@@ -1,100 +1,158 @@
 {
-  "_comment": "AWS EMR cluster spec. It runs the same canonical mapInPandas feature code as the Databricks pathway. Use with: aws emr create-cluster --cli-input-json file://emr_cluster_config.json",
-
-  "Name": "yelp-iteration2-corrected-emr",
+  "Name": "yelp-review-intelligence-emr",
   "ReleaseLabel": "emr-7.13.0",
-  "_ReleaseLabel_comment": "Pinned to the EMR release carrying Spark 3.5.6 so it matches the local PySpark 3.5.6 gate. Confirm this release is available in the target Region before launch. This cluster never touches Spark NLP.",
-
   "Applications": [
     { "Name": "Spark" }
   ],
-  "_Applications_comment": "Spark only. No 'Hive', no extra JVM-side application bundles beyond what plain Spark needs - keeps the same 'no unnecessary JVM surface area' discipline as the Databricks side.",
-
+  "Configurations": [
+    {
+      "Classification": "spark-hive-site",
+      "Properties": {
+        "hive.metastore.client.factory.class": "com.amazonaws.glue.catalog.metastore.AWSGlueDataCatalogHiveClientFactory"
+      }
+    },
+    {
+      "Classification": "spark-defaults",
+      "Properties": {
+        "spark.sql.shuffle.partitions": "192"
+      }
+    },
+    {
+      "Classification": "spark-env",
+      "Configurations": [
+        {
+          "Classification": "export",
+          "Properties": {
+            "PYSPARK_PYTHON": "/usr/bin/python3.11",
+            "PYSPARK_DRIVER_PYTHON": "/usr/bin/python3.11"
+          }
+        }
+      ],
+      "Properties": {}
+    }
+  ],
   "Instances": {
     "InstanceGroups": [
       {
         "Name": "Driver",
         "InstanceRole": "MASTER",
-        "InstanceType": "REPLACE_WITH_YOUR_INSTANCE_TYPE",
+        "InstanceType": "REPLACE_WITH_DRIVER_INSTANCE_TYPE",
         "InstanceCount": 1
       },
       {
         "Name": "Workers",
         "InstanceRole": "CORE",
-        "InstanceType": "REPLACE_WITH_YOUR_INSTANCE_TYPE",
-        "InstanceCount": 2,
-        "_InstanceCount_comment": "roadmap step 2: 'driver + a small number of workers to start'. Same caution as Databricks: don't scale past this until tests/parity_check.py has passed against this exact cluster."
+        "InstanceType": "REPLACE_WITH_WORKER_INSTANCE_TYPE",
+        "InstanceCount": 2
       }
     ],
     "Ec2SubnetId": "REPLACE_WITH_YOUR_SUBNET_ID",
-    "KeepJobFlowAliveWhenNoSteps": false,
-    "_KeepJobFlowAliveWhenNoSteps_comment": "false = a TRANSIENT cluster that terminates after its Steps finish (roadmap step 8: run as a scheduled/triggered Job, not something left running - cost bounded to actual runtime, same discipline as the Databricks Job cluster, not an all-purpose interactive one)."
+    "KeepJobFlowAliveWhenNoSteps": false
   },
-
   "BootstrapActions": [
     {
-      "Name": "install-pinned-python-libs",
+      "Name": "install-pinned-yelp-python-runtime",
       "ScriptBootstrapAction": {
-        "Path": "s3://REPLACE_WITH_YOUR_BUCKET/bootstrap/bootstrap.sh"
+        "Path": "s3://REPLACE_WITH_YOUR_BUCKET/yelp/bootstrap/bootstrap.sh"
       }
     }
   ],
-  "_BootstrapActions_comment": "See bootstrap.sh in this folder. It installs the same pinned feature libraries as databricks_integration/requirements.txt and does not install Spark NLP.",
-
   "Steps": [
     {
-      "Name": "build-idempotent-bronze-parquet",
+      "Name": "stage-yelp-bronze-parquet",
       "ActionOnFailure": "TERMINATE_CLUSTER",
-      "_comment": "Reads the three documented Yelp JSON-lines files with explicit schemas. Complete Parquet outputs are skipped on rerun; rebuilding requires adding --overwrite deliberately.",
       "HadoopJarStep": {
         "Jar": "command-runner.jar",
         "Args": [
           "spark-submit",
-          "s3://REPLACE_WITH_YOUR_BUCKET/pipeline/bronze_json_to_parquet.py",
-          "--datasets", "review", "business", "user",
-          "--input-root", "s3://REPLACE_WITH_YOUR_BUCKET/raw/",
-          "--output-root", "s3://REPLACE_WITH_YOUR_BUCKET/parquet/",
+          "s3://REPLACE_WITH_YOUR_BUCKET/yelp/pipeline/bronze_json_to_parquet.py",
+          "--datasets", "review", "business", "checkin", "tip", "user",
+          "--input-root", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/raw/",
+          "--output-root", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/bronze-source/",
           "--review-partitions", "192",
           "--business-partitions", "8",
+          "--checkin-partitions", "8",
+          "--tip-partitions", "16",
           "--user-partitions", "32"
         ]
       }
     },
     {
-      "Name": "run-iteration2-corrected-pipeline",
+      "Name": "bronze-to-silver-yelp",
       "ActionOnFailure": "TERMINATE_CLUSTER",
-      "_ActionOnFailure_comment": "Fail loudly and stop, don't keep burning cluster hours on a failed validate() gate.",
-      "_HadoopJarStep_py_files_comment": "--py-files must contain every pipeline/*.py module, including lexicon_cli.py, spark_validate.py, and run_logger.py. Build deterministically with `python aws_emr/build_pipeline_package.py` and upload after every code change.",
       "HadoopJarStep": {
         "Jar": "command-runner.jar",
         "Args": [
           "spark-submit",
-          "--py-files", "s3://REPLACE_WITH_YOUR_BUCKET/pipeline/pipeline_modules.zip",
-          "--files", "s3://REPLACE_WITH_YOUR_BUCKET/lexicons/NRC-VAD-Lexicon-v2.1.txt,s3://REPLACE_WITH_YOUR_BUCKET/lexicons/worrywords-v1.txt,s3://REPLACE_WITH_YOUR_BUCKET/lexicons/NRC-WCST-Lexicon-v1.0.txt,s3://REPLACE_WITH_YOUR_BUCKET/lexicons/Yelp-restaurant-reviews-AFFLEX-NEGLEX-unigrams.txt,s3://REPLACE_WITH_YOUR_BUCKET/lexicons/NRC-Emotion-Intensity-Lexicon-v1.txt",
-          "s3://REPLACE_WITH_YOUR_BUCKET/pipeline/spark_feature_engineering.py",
-          "--reviews-path", "s3://REPLACE_WITH_YOUR_BUCKET/parquet/yelp_academic_dataset_review/",
-          "--businesses-path", "s3://REPLACE_WITH_YOUR_BUCKET/parquet/yelp_academic_dataset_business/",
-          "--users-path", "s3://REPLACE_WITH_YOUR_BUCKET/parquet/yelp_academic_dataset_user/",
-          "--vad-lexicon", "NRC-VAD-Lexicon-v2.1.txt",
-          "--worry-lexicon", "worrywords-v1.txt",
-          "--wcst-lexicon", "NRC-WCST-Lexicon-v1.0.txt",
-          "--yelp-lexicon", "Yelp-restaurant-reviews-AFFLEX-NEGLEX-unigrams.txt",
-          "--nrc-intensity-lexicon", "NRC-Emotion-Intensity-Lexicon-v1.txt",
-          "--outdir", "s3://REPLACE_WITH_YOUR_BUCKET/gold/",
-          "--log-path", "s3://REPLACE_WITH_YOUR_BUCKET/pipeline-run-log/",
-          "--output-format", "parquet",
-          "--at-scale"
+          "--py-files", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/pipeline/pipeline_modules.zip",
+          "s3://REPLACE_WITH_YOUR_BUCKET/yelp/tasks/bronze_to_silver.py",
+          "--input-root", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/bronze-source/",
+          "--output-root", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/lakehouse/",
+          "--audit-log", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/audit/",
+          "--lexicons-dir", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/lexicons/",
+          "--database", "yelp",
+          "--table-prefix", "yelp",
+          "--mode", "overwrite",
+          "--partitions", "192",
+          "--arrow-batch-size", "5000",
+          "--nlp-component", "linguistic",
+          "--nlp-component", "vader",
+          "--nlp-component", "nrc-emotion",
+          "--nlp-component", "vad",
+          "--nlp-component", "entities",
+          "--nlp-component", "grammar",
+          "--nlp-component", "domain-lexicons",
+          "--nlp-component", "time-weighting"
+        ]
+      }
+    },
+    {
+      "Name": "silver-to-gold-yelp",
+      "ActionOnFailure": "TERMINATE_CLUSTER",
+      "HadoopJarStep": {
+        "Jar": "command-runner.jar",
+        "Args": [
+          "spark-submit",
+          "--py-files", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/pipeline/pipeline_modules.zip",
+          "s3://REPLACE_WITH_YOUR_BUCKET/yelp/tasks/silver_to_gold.py",
+          "--database", "yelp",
+          "--table-prefix", "yelp",
+          "--input-table", "yelp.yelp_silver_reviews",
+          "--output-table", "yelp.yelp_gold_dashboard_variant",
+          "--output-path", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/lakehouse/gold/dashboard_variant/",
+          "--audit-log", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/audit/",
+          "--gold-level", "brand-sample",
+          "--brand", "Chipotle",
+          "--brand", "Great Clips",
+          "--gold-sample-size", "5000",
+          "--gold-sample-seed", "222"
+        ]
+      }
+    },
+    {
+      "Name": "data-science-dashboard-yelp",
+      "ActionOnFailure": "TERMINATE_CLUSTER",
+      "HadoopJarStep": {
+        "Jar": "command-runner.jar",
+        "Args": [
+          "spark-submit",
+          "--py-files", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/pipeline/pipeline_modules.zip",
+          "s3://REPLACE_WITH_YOUR_BUCKET/yelp/tasks/data_science_dashboard.py",
+          "--database", "yelp",
+          "--table-prefix", "yelp",
+          "--gold-table", "yelp.yelp_gold_dashboard_variant",
+          "--output-root", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/lakehouse/dashboard/",
+          "--audit-log", "s3://REPLACE_WITH_YOUR_BUCKET/yelp/audit/"
         ]
       }
     }
   ],
-
-  "JobFlowRole": "EMR_EC2_DefaultRole",
-  "ServiceRole": "EMR_DefaultRole",
-
+  "LogUri": "s3://REPLACE_WITH_YOUR_BUCKET/yelp/emr-logs/",
+  "JobFlowRole": "REPLACE_WITH_EMR_EC2_INSTANCE_PROFILE",
+  "ServiceRole": "REPLACE_WITH_EMR_SERVICE_ROLE",
   "Tags": [
     { "Key": "project", "Value": "yelp-review-intelligence" },
-    { "Key": "iteration", "Value": "2-corrected" },
-    { "Key": "purpose", "Value": "bronze-silver-gold feature engineering only - no dashboard or analysis run here" }
+    { "Key": "architecture", "Value": "bronze-silver-gold-dashboard" },
+    { "Key": "lifecycle", "Value": "transient" }
   ]
 }

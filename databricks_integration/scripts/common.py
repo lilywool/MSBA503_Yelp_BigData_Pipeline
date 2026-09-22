@@ -16,7 +16,7 @@ def table_name(catalog: str, schema: str, name: str) -> str:
     invalid = [part for part in parts if not IDENTIFIER.fullmatch(part)]
     if invalid:
         raise ValueError(
-            f"Unity Catalog identifiers may contain only letters, numbers, and underscores: {invalid}"
+            f"Catalog identifiers may contain only letters, numbers, and underscores: {invalid}"
         )
     return ".".join(parts)
 

@@ -16,6 +16,11 @@
 
 set -euo pipefail
 
+if [[ ! -x /usr/bin/python3.11 ]]; then
+    echo "[bootstrap] ERROR: EMR release does not provide /usr/bin/python3.11" >&2
+    exit 2
+fi
+
 echo "[bootstrap] Installing pinned Python libraries..."
 sudo /usr/bin/python3.11 -m pip install --quiet \
     "pandas==2.2.3" \

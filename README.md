@@ -175,10 +175,14 @@ least-privilege access; no token or password is stored in this repository.
 
 ## AWS EMR pathway
 
-`aws_emr/` keeps the same canonical feature code deployable on EMR with S3
-inputs/outputs, a deterministic Python-module package, an ephemeral job cluster,
-and a bootstrap action using the same pinned Python feature stack. This pathway
-both documents the course platform and remains a viable alternative deployment.
+`aws_emr/` provides a current EMR-native mirror of the three Databricks stages:
+Bronze-to-Silver, parameterized Silver-to-Gold, and dashboard-serving outputs.
+It uses S3 Parquet, AWS Glue/Athena, classic Spark persistence, a deterministic
+executor package, and a transient job cluster. It shares the canonical feature
+and analytical contracts without copying Databricks-specific Delta or Spark
+Connect behavior. The deployment installs no Spark NLP or custom Java stack.
+This pathway both documents the course platform and remains a viable alternative
+deployment.
 See `aws_emr/README.md`.
 
 ## Local verification

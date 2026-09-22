@@ -16,17 +16,23 @@ SPEC.loader.exec_module(builder)
 
 class EmrPackageBuilderTests(unittest.TestCase):
     def test_package_is_complete_and_deterministic(self):
+        common = REPO_ROOT / "aws_emr" / "scripts" / "emr_common.py"
         with tempfile.TemporaryDirectory(prefix="yelp_emr_package_test_") as tmpdir:
             first = Path(tmpdir) / "first.zip"
             second = Path(tmpdir) / "second.zip"
-            first_hash = builder.build_package(REPO_ROOT / "pipeline", first)
-            second_hash = builder.build_package(REPO_ROOT / "pipeline", second)
+            first_hash = builder.build_package(
+                REPO_ROOT / "pipeline", first, task_modules=(common,)
+            )
+            second_hash = builder.build_package(
+                REPO_ROOT / "pipeline", second, task_modules=(common,)
+            )
 
             self.assertEqual(first_hash, second_hash)
             with ZipFile(first) as archive:
                 names = set(archive.namelist())
-            self.assertTrue(builder.REQUIRED_MODULES.issubset(names))
+            self.assertTrue(builder.REQUIRED_PIPELINE_MODULES.issubset(names))
             self.assertIn("spark_feature_engineering.py", names)
+            self.assertIn("emr_common.py", names)
 
             crlf_pipeline = Path(tmpdir) / "crlf_pipeline"
             crlf_pipeline.mkdir()
@@ -36,7 +42,9 @@ class EmrPackageBuilderTests(unittest.TestCase):
                     normalized.replace(b"\n", b"\r\n")
                 )
             crlf_hash = builder.build_package(
-                crlf_pipeline, Path(tmpdir) / "crlf.zip"
+                crlf_pipeline,
+                Path(tmpdir) / "crlf.zip",
+                task_modules=(common,),
             )
             self.assertEqual(first_hash, crlf_hash)
 
