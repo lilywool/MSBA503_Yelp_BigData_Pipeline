@@ -11,7 +11,13 @@ SCRIPTS = REPO_ROOT / "databricks_integration" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(REPO_ROOT / "pipeline"))
 
-from common import table_name
+from common import (
+    materialize_frame,
+    parse_materialization_schema,
+    release_resources,
+    resolve_materialization_mode,
+    table_name,
+)
 from corrected_feature_engineering import output_columns_for
 
 
@@ -45,12 +51,17 @@ class DatabricksContractTests(unittest.TestCase):
         self.assertIn("{{job.parameters.silver_sample_size}}", parameters)
         self.assertNotIn("--lexicons-dir", parameters)
         self.assertIn("--partitions", parameters)
+        self.assertIn("--materialization-mode", parameters)
+        self.assertIn("{{job.parameters.materialization_mode}}", parameters)
+        self.assertIn("--materialization-schema", parameters)
 
         gold_parameters = tasks["silver_to_gold_yelp"]["spark_python_task"]["parameters"]
         self.assertIn("--gold-level", gold_parameters)
         self.assertIn("brand-sample", gold_parameters)
         self.assertIn("--gold-sample-size", gold_parameters)
         self.assertIn("{{job.parameters.gold_sample_size}}", gold_parameters)
+        self.assertIn("--materialization-mode", gold_parameters)
+        self.assertIn("--materialization-schema", gold_parameters)
         self.assertEqual(gold_parameters.count("--brand"), 2)
 
         dashboard_parameters = tasks["data_science_dashboard_yelp"]["spark_python_task"]["parameters"]
@@ -60,6 +71,8 @@ class DatabricksContractTests(unittest.TestCase):
         defaults = {item["name"]: item["default"] for item in config["parameters"]}
         self.assertEqual(defaults["silver_sample_size"], "25000")
         self.assertEqual(defaults["gold_sample_size"], "5000")
+        self.assertEqual(defaults["materialization_mode"], "auto")
+        self.assertEqual(defaults["materialization_schema"], "workspace.default")
         serialized = json.dumps(config)
         self.assertNotIn("/Volumes/", serialized)
         self.assertNotIn("job_clusters", config)
@@ -88,6 +101,13 @@ class DatabricksContractTests(unittest.TestCase):
             python_file = task["spark_python_task"]["python_file"]
             self.assertEqual(task["spark_python_task"]["source"], "GIT")
             self.assertTrue((REPO_ROOT / python_file).is_file(), python_file)
+
+        bronze_source = (SCRIPTS / "bronze_to_silver.py").read_text(encoding="utf-8")
+        gold_source = (SCRIPTS / "silver_to_gold.py").read_text(encoding="utf-8")
+        self.assertIn('F.col("_metadata.file_path")', bronze_source)
+        self.assertNotIn("F.input_file_name()", bronze_source)
+        self.assertNotIn(".persist(", bronze_source)
+        self.assertNotIn(".persist(", gold_source)
 
     def test_serverless_dependencies_do_not_replace_runtime_core_packages(self):
         requirements = (
@@ -163,6 +183,79 @@ class DatabricksContractTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             table_name("workspace", "default", "yelp; DROP TABLE reviews")
+
+        self.assertEqual(
+            parse_materialization_schema("workspace.default"),
+            ("workspace", "default"),
+        )
+        with self.assertRaisesRegex(ValueError, "two-part"):
+            parse_materialization_schema("workspace")
+        self.assertEqual(resolve_materialization_mode("persist"), "persist")
+        self.assertEqual(resolve_materialization_mode("delta"), "delta")
+        self.assertEqual(resolve_materialization_mode("none"), "none")
+        self.assertEqual(resolve_materialization_mode("auto"), "persist")
+        with self.assertRaisesRegex(ValueError, "invalid materialization mode"):
+            resolve_materialization_mode("cache")
+
+        class FakeWriter:
+            def __init__(self):
+                self.saved = []
+
+            def format(self, value):
+                self.format_name = value
+                return self
+
+            def mode(self, value):
+                self.mode_name = value
+                return self
+
+            def option(self, key, value):
+                self.option_value = (key, value)
+                return self
+
+            def saveAsTable(self, value):
+                self.saved.append(value)
+
+        class FakePlan:
+            def __init__(self):
+                self.write = FakeWriter()
+
+        class FakeSpark:
+            def __init__(self):
+                self.sql_calls = []
+                self.loaded = []
+
+            def table(self, name):
+                self.loaded.append(name)
+                return {"table": name}
+
+            def sql(self, statement):
+                self.sql_calls.append(statement)
+
+        spark = FakeSpark()
+        plan = FakePlan()
+        metadata = {
+            "materialization": {"mode": "delta", "temporary_tables": []}
+        }
+        result = materialize_frame(
+            spark,
+            plan,
+            mode="delta",
+            materialization_schema="workspace.default",
+            stage="silver",
+            run_id="abc123",
+            metadata=metadata,
+            persisted_frames=[],
+        )
+        scratch = "workspace.default._yelp_silver_abc123"
+        self.assertEqual(result, {"table": scratch})
+        self.assertEqual(plan.write.saved, [scratch])
+        self.assertEqual(metadata["materialization"]["temporary_tables"], [scratch])
+        release_resources(spark, [], metadata)
+        self.assertEqual(
+            spark.sql_calls,
+            ["DROP TABLE IF EXISTS `workspace`.`default`.`_yelp_silver_abc123`"],
+        )
 
     def test_dashboard_app_is_deployable_from_its_own_directory(self):
         app_dir = REPO_ROOT / "databricks_integration" / "dashboard_app"

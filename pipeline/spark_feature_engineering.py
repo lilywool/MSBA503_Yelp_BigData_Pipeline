@@ -205,7 +205,7 @@ def read_prepared_input(spark, input_path: str, input_format: str = "csv"):
             .csv(input_path))
 
 
-def build_silver_frame(reviews, businesses, users):
+def build_silver_frame(reviews, businesses, users, *, broadcast_dimensions=True):
     """Build the canonical Silver review table from three Spark DataFrames.
 
     Keeping the relational work in one function lets local Parquet, AWS S3, and
@@ -234,8 +234,9 @@ def build_silver_frame(reviews, businesses, users):
              )
              .dropDuplicates(["user_id"]))
 
+    business_dimension = F.broadcast(businesses) if broadcast_dimensions else businesses
     joined = (reviews
-              .join(F.broadcast(businesses), "business_id", "left")
+              .join(business_dimension, "business_id", "left")
               .join(users, "user_id", "left")
               .withColumn("year_month", F.date_format("review_date", "yyyy-MM")))
     return _add_industry_columns(joined)
@@ -252,7 +253,7 @@ def read_joined_input(spark, reviews_path: str, businesses_path: str, users_path
 
 def apply_features(spark, sdf, text_col: str, lexicon_paths: dict,
                    use_transformers: bool, num_partitions: int | None = None,
-                   feature_groups=None):
+                   feature_groups=None, use_broadcasts: bool = True):
     """Apply the canonical feature payload to an already prepared Spark frame."""
     spark_context = _classic_spark_context(spark)
     if spark_context is not None:
@@ -273,10 +274,11 @@ def apply_features(spark, sdf, text_col: str, lexicon_paths: dict,
     staged_filenames = None
     lexicons_bc = None
     lexicon_payloads = None
-    if spark_context is None:
+    if spark_context is None or not use_broadcasts:
         # Google Drive files have already been materialized as temporary local
         # files by the Databricks entry point. Close over their exact bytes so
-        # Spark Connect can distribute them without SparkContext/SparkFiles.
+        # Spark Connect or an explicitly Delta-materialized run can distribute
+        # them without SparkContext/SparkFiles broadcast state.
         lexicon_payloads = {}
         for key, source in lexicon_paths.items():
             path = Path(source)

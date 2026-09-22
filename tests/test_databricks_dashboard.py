@@ -243,6 +243,8 @@ class DashboardTransformTests(unittest.TestCase):
         )
         self.assertEqual(bronze.silver_sample_size, 25000)
         self.assertEqual(bronze.silver_sample_seed, 11)
+        self.assertEqual(bronze.materialization_mode, "auto")
+        self.assertEqual(bronze.materialization_schema, "workspace.default")
         drive = parse_bronze_args(
             [
                 "--google-drive-folder-url", "https://drive.google.com/drive/folders/example",
@@ -254,6 +256,8 @@ class DashboardTransformTests(unittest.TestCase):
         self.assertIsNone(drive.google_drive_lexicons_folder_url)
         self.assertEqual(gold.gold_sample_size, 5000)
         self.assertEqual(gold.gold_sample_seed, 29)
+        self.assertEqual(gold.materialization_mode, "auto")
+        self.assertEqual(gold.materialization_schema, "workspace.default")
         self.assertEqual(effective_sample_size(50000, 25000), 25000)
         self.assertEqual(effective_sample_size(5000, 25000), 5000)
 

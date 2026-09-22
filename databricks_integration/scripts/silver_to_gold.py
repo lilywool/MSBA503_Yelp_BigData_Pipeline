@@ -6,8 +6,8 @@ import argparse
 import sys
 from functools import reduce
 from pathlib import Path
+from uuid import uuid4
 
-from pyspark import StorageLevel
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
 
@@ -23,9 +23,14 @@ REPO_ROOT = SCRIPT_PATH.parents[2]
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from common import (  # noqa: E402
+    add_materialization_args,
     append_audit,
     ensure_schema,
+    materialize_frame,
+    parse_materialization_schema,
+    release_resources,
     require_columns,
+    resolve_materialization_mode,
     table_name,
     write_delta_table,
 )
@@ -72,6 +77,7 @@ def parse_args(argv=None):
     parser.add_argument("--table-prefix", default="yelp")
     parser.add_argument("--input-table", default=None)
     parser.add_argument("--output-table", default=None)
+    add_materialization_args(parser)
     parser.add_argument("--gold-level", choices=GOLD_LEVELS, required=True)
     parser.add_argument(
         "--gold-sample-size",
@@ -405,7 +411,12 @@ def main(argv=None) -> int:
     if args.min_stars is not None and args.max_stars is not None and args.min_stars > args.max_stars:
         raise ValueError("--min-stars must not exceed --max-stars")
     spark = SparkSession.builder.appName("yelp-silver-to-gold").getOrCreate()
+    materialization_mode = resolve_materialization_mode(args.materialization_mode)
+    materialization_catalog, materialization_schema = parse_materialization_schema(
+        args.materialization_schema
+    )
     ensure_schema(spark, args.catalog, args.schema)
+    ensure_schema(spark, materialization_catalog, materialization_schema)
     input_table = args.input_table or table_name(
         args.catalog, args.schema, f"{args.table_prefix}_silver_reviews"
     )
@@ -415,12 +426,20 @@ def main(argv=None) -> int:
         f"{args.table_prefix}_gold_{args.gold_level.replace('-', '_')}",
     )
     audit_table = table_name(args.catalog, args.schema, f"{args.table_prefix}_pipeline_audit")
+    run_id = uuid4().hex
     metrics = {
         "input_table": input_table,
         "output_table": output_table,
         "gold_level": args.gold_level,
         "gold_sample_size": args.gold_sample_size,
         "gold_sample_seed": args.gold_sample_seed,
+        "materialization": {
+            "requested_mode": args.materialization_mode,
+            "mode": materialization_mode,
+            "schema": args.materialization_schema,
+            "run_id": run_id,
+            "temporary_tables": [],
+        },
         "filters": {
             "business_ids": args.business_ids,
             "business_names": args.business_names,
@@ -441,10 +460,10 @@ def main(argv=None) -> int:
             "brands": args.brands,
         },
     }
-    gold = None
+    persisted_frames = []
     try:
         silver = spark.table(input_table)
-        filtered = apply_gold_filters(
+        filtered_plan = apply_gold_filters(
             silver,
             business_ids=args.business_ids,
             business_names=args.business_names,
@@ -463,6 +482,16 @@ def main(argv=None) -> int:
             min_stars=args.min_stars,
             max_stars=args.max_stars,
         )
+        filtered = materialize_frame(
+            spark,
+            filtered_plan,
+            mode=materialization_mode,
+            materialization_schema=args.materialization_schema,
+            stage="filtered_silver",
+            run_id=run_id,
+            metadata=metrics,
+            persisted_frames=persisted_frames,
+        )
         metrics["eligible_silver_rows"] = filtered.count()
         effective_gold_sample_size = effective_sample_size(
             args.gold_sample_size,
@@ -480,7 +509,7 @@ def main(argv=None) -> int:
                 f"of {metrics['eligible_silver_rows']:,}; using "
                 f"{effective_gold_sample_size:,}."
             )
-        gold = build_gold_variant(
+        gold_plan = build_gold_variant(
             filtered,
             gold_level=args.gold_level,
             sample_size=effective_gold_sample_size,
@@ -489,8 +518,16 @@ def main(argv=None) -> int:
             date_granularity=args.date_granularity,
             emotion_column=args.emotion_column,
             sentiment_column=args.sentiment_column,
-        ).withColumn("gold_created_at", F.current_timestamp()).persist(
-            StorageLevel.MEMORY_AND_DISK
+        ).withColumn("gold_created_at", F.current_timestamp())
+        gold = materialize_frame(
+            spark,
+            gold_plan,
+            mode=materialization_mode,
+            materialization_schema=args.materialization_schema,
+            stage="gold",
+            run_id=run_id,
+            metadata=metrics,
+            persisted_frames=persisted_frames,
         )
         metrics["validation"] = validate_gold(
             gold,
@@ -510,8 +547,7 @@ def main(argv=None) -> int:
             print(f"WARNING: failed to append the failure audit record: {audit_exc}")
         raise
     finally:
-        if gold is not None:
-            gold.unpersist()
+        release_resources(spark, persisted_frames, metrics)
 
 
 if __name__ == "__main__":

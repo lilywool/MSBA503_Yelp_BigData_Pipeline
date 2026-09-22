@@ -11,7 +11,9 @@ try:
 except ImportError:
     SparkSession = None
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "pipeline"))
+REPO_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(REPO_ROOT / "databricks_integration" / "scripts"))
+sys.path.insert(0, str(REPO_ROOT / "pipeline"))
 
 
 @unittest.skipIf(SparkSession is None, "PySpark is not installed")
@@ -32,6 +34,7 @@ class BronzeConverterTests(unittest.TestCase):
 
     def test_review_conversion_is_explicit_and_idempotent(self):
         from bronze_json_to_parquet import DATASETS, convert_dataset
+        from bronze_to_silver import _read_json
 
         self.assertEqual(
             set(DATASETS), {"review", "business", "checkin", "tip", "user"}
@@ -53,14 +56,13 @@ class BronzeConverterTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="yelp_bronze_test_") as tmpdir:
             root = Path(tmpdir)
-            source = root / "reviews.json"
+            spec = DATASETS["review"]
+            source = root / spec.filename
             source.write_text(
                 "\n".join(json.dumps(row) for row in rows) + "\n",
                 encoding="utf-8",
             )
             output = root / "reviews_parquet"
-            spec = DATASETS["review"]
-
             first = convert_dataset(
                 self.spark, spec, str(source), str(output), partitions=2
             )
@@ -74,6 +76,20 @@ class BronzeConverterTests(unittest.TestCase):
             self.assertEqual(converted.count(), 2)
             self.assertEqual(converted.schema["stars"].dataType.simpleString(), "double")
             self.assertNotIn("unknown_future_field", converted.columns)
+
+            databricks_bronze = _read_json(
+                self.spark,
+                spec,
+                input_volume=str(root),
+                google_drive_folder_url=None,
+                google_drive_connection=None,
+            )
+            source_paths = {
+                row["_source_file"]
+                for row in databricks_bronze.select("_source_file").distinct().collect()
+            }
+            self.assertEqual(len(source_paths), 1)
+            self.assertTrue(next(iter(source_paths)).endswith(spec.filename))
 
 
 if __name__ == "__main__":

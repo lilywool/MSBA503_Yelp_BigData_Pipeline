@@ -25,6 +25,14 @@
     {
       "name": "gold_sample_seed",
       "default": "222"
+    },
+    {
+      "name": "materialization_mode",
+      "default": "auto"
+    },
+    {
+      "name": "materialization_schema",
+      "default": "workspace.default"
     }
   ],
   "git_source": {
@@ -47,6 +55,8 @@
           "--table-prefix", "yelp",
           "--partitions", "192",
           "--arrow-batch-size", "5000",
+          "--materialization-mode", "{{job.parameters.materialization_mode}}",
+          "--materialization-schema", "{{job.parameters.materialization_schema}}",
           "--silver-sample-size", "{{job.parameters.silver_sample_size}}",
           "--silver-sample-seed", "{{job.parameters.silver_sample_seed}}",
           "--nlp-component", "linguistic",
@@ -77,6 +87,8 @@
           "--table-prefix", "yelp",
           "--input-table", "workspace.default.yelp_silver_reviews",
           "--output-table", "workspace.default.yelp_gold_dashboard_variant",
+          "--materialization-mode", "{{job.parameters.materialization_mode}}",
+          "--materialization-schema", "{{job.parameters.materialization_schema}}",
           "--gold-level", "brand-sample",
           "--brand", "Chipotle",
           "--brand", "Great Clips",

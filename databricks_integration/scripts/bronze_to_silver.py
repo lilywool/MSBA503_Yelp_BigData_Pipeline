@@ -7,8 +7,8 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from uuid import uuid4
 
-from pyspark import StorageLevel
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
 
@@ -34,10 +34,15 @@ from lexicon_cli import (  # noqa: E402
 from spark_feature_engineering import apply_features, build_silver_frame, cfe  # noqa: E402
 from spark_validate import validate_spark_at_scale  # noqa: E402
 from common import (  # noqa: E402
+    add_materialization_args,
     append_audit,
     ensure_schema,
+    materialize_frame,
+    parse_materialization_schema,
+    release_resources,
     require_columns,
     require_nonempty,
+    resolve_materialization_mode,
     table_name,
     write_delta_table,
 )
@@ -76,6 +81,7 @@ def parse_args(argv=None):
     parser.add_argument("--mode", choices=("overwrite", "errorifexists"), default="overwrite")
     parser.add_argument("--partitions", type=int, default=None)
     parser.add_argument("--arrow-batch-size", type=int, default=5000)
+    add_materialization_args(parser)
     parser.add_argument(
         "--silver-sample-size",
         "--sample-size",
@@ -257,7 +263,7 @@ def _read_json(
         frame = reader.json(join_path(input_volume, spec.filename))
     return (
         frame
-        .withColumn("_source_file", F.input_file_name())
+        .withColumn("_source_file", F.col("_metadata.file_path"))
         .withColumn("_ingested_at", F.current_timestamp())
     )
 
@@ -301,7 +307,13 @@ def sample_reviews(frame, sample_size: int | None, seed: int):
     )
 
 
-def scope_related_dataset(frame, dataset_name: str, selected_reviews):
+def scope_related_dataset(
+    frame,
+    dataset_name: str,
+    selected_reviews,
+    *,
+    use_broadcasts: bool = True,
+):
     """Keep only dimension/fact rows related to the selected review sample."""
     if dataset_name == "review":
         return selected_reviews
@@ -309,12 +321,14 @@ def scope_related_dataset(frame, dataset_name: str, selected_reviews):
         keys = selected_reviews.select("user_id").where(
             F.col("user_id").isNotNull()
         ).distinct()
-        return frame.join(F.broadcast(keys), "user_id", "left_semi")
+        join_keys = F.broadcast(keys) if use_broadcasts else keys
+        return frame.join(join_keys, "user_id", "left_semi")
     if dataset_name in {"business", "checkin", "tip"}:
         keys = selected_reviews.select("business_id").where(
             F.col("business_id").isNotNull()
         ).distinct()
-        return frame.join(F.broadcast(keys), "business_id", "left_semi")
+        join_keys = F.broadcast(keys) if use_broadcasts else keys
+        return frame.join(join_keys, "business_id", "left_semi")
     raise ValueError(f"Unsupported Yelp dataset: {dataset_name}")
 
 
@@ -351,8 +365,14 @@ def main(argv=None) -> int:
         raise ValueError("--arrow-batch-size must be at least 1")
     spark = SparkSession.builder.appName("yelp-bronze-to-silver").getOrCreate()
     arrow_runtime_config = configure_arrow_runtime(spark, args.arrow_batch_size)
+    materialization_mode = resolve_materialization_mode(args.materialization_mode)
+    materialization_catalog, materialization_schema = parse_materialization_schema(
+        args.materialization_schema
+    )
     ensure_schema(spark, args.catalog, args.schema)
+    ensure_schema(spark, materialization_catalog, materialization_schema)
     audit_table = table_name(args.catalog, args.schema, f"{args.table_prefix}_pipeline_audit")
+    run_id = uuid4().hex
     metrics = {
         "input_source": (
             {
@@ -382,6 +402,13 @@ def main(argv=None) -> int:
         "silver_sample_seed": args.silver_sample_seed,
         "arrow_batch_size_requested": args.arrow_batch_size,
         "arrow_runtime_config_applied": arrow_runtime_config,
+        "materialization": {
+            "requested_mode": args.materialization_mode,
+            "mode": materialization_mode,
+            "schema": args.materialization_schema,
+            "run_id": run_id,
+            "temporary_tables": [],
+        },
         "nlp_components": list(
             cfe.normalize_feature_groups(
                 args.nlp_components,
@@ -391,11 +418,12 @@ def main(argv=None) -> int:
             )
         ),
     }
+    persisted_frames = []
 
     try:
         destinations = {}
         review_spec = DATASETS["review"]
-        selected_reviews = sample_reviews(
+        selected_reviews_plan = sample_reviews(
             _read_json(
                 spark,
                 review_spec,
@@ -405,7 +433,17 @@ def main(argv=None) -> int:
             ),
             args.silver_sample_size,
             args.silver_sample_seed,
-        ).persist(StorageLevel.MEMORY_AND_DISK)
+        )
+        selected_reviews = materialize_frame(
+            spark,
+            selected_reviews_plan,
+            mode=materialization_mode,
+            materialization_schema=args.materialization_schema,
+            stage="selected_reviews",
+            run_id=run_id,
+            metadata=metrics,
+            persisted_frames=persisted_frames,
+        )
 
         for dataset_name, spec in DATASETS.items():
             if dataset_name == "review":
@@ -418,40 +456,59 @@ def main(argv=None) -> int:
                     google_drive_folder_url=args.google_drive_folder_url,
                     google_drive_connection=args.google_drive_connection,
                 )
-                frame = (
-                    scope_related_dataset(source_frame, dataset_name, selected_reviews)
-                    if args.silver_sample_size is not None
-                    else source_frame
-                ).persist(
-                    StorageLevel.MEMORY_AND_DISK
+                if args.silver_sample_size is not None:
+                    frame_plan = scope_related_dataset(
+                        source_frame,
+                        dataset_name,
+                        selected_reviews,
+                        use_broadcasts=(materialization_mode == "persist"),
+                    )
+                else:
+                    frame_plan = source_frame
+                frame = materialize_frame(
+                    spark,
+                    frame_plan,
+                    mode=materialization_mode,
+                    materialization_schema=args.materialization_schema,
+                    stage=f"bronze_{dataset_name}",
+                    run_id=run_id,
+                    metadata=metrics,
+                    persisted_frames=persisted_frames,
                 )
             destinations[dataset_name] = table_name(
                 args.catalog, args.schema, f"{args.table_prefix}_bronze_{dataset_name}"
             )
-            try:
-                metrics["bronze_rows"][dataset_name] = _validate_bronze(
-                    frame,
-                    spec,
-                    allow_empty=(
-                        args.silver_sample_size is not None
-                        and dataset_name in {"checkin", "tip"}
-                    ),
-                )
-                write_delta_table(frame, destinations[dataset_name], args.mode)
-            finally:
-                if dataset_name != "review":
-                    frame.unpersist()
+            metrics["bronze_rows"][dataset_name] = _validate_bronze(
+                frame,
+                spec,
+                allow_empty=(
+                    args.silver_sample_size is not None
+                    and dataset_name in {"checkin", "tip"}
+                ),
+            )
+            write_delta_table(frame, destinations[dataset_name], args.mode)
 
-        joined = build_silver_frame(
+        joined_plan = build_silver_frame(
             spark.table(destinations["review"]),
             spark.table(destinations["business"]),
             spark.table(destinations["user"]),
+            broadcast_dimensions=(materialization_mode == "persist"),
+        )
+        joined = materialize_frame(
+            spark,
+            joined_plan,
+            mode=materialization_mode,
+            materialization_schema=args.materialization_schema,
+            stage="core_cleaning",
+            run_id=run_id,
+            metadata=metrics,
+            persisted_frames=persisted_frames,
         )
         use_transformers = bool(
             args.nlp_components and "transformers" in args.nlp_components
         )
         with _feature_lexicon_paths(spark, args) as lexicon_paths:
-            silver = apply_features(
+            silver_plan = apply_features(
                 spark=spark,
                 sdf=joined,
                 text_col="raw_review",
@@ -459,32 +516,39 @@ def main(argv=None) -> int:
                 use_transformers=use_transformers,
                 num_partitions=args.partitions,
                 feature_groups=args.nlp_components,
-            ).persist(StorageLevel.MEMORY_AND_DISK)
-            try:
-                require_columns(
-                    silver,
-                    {"review_id", "business_id", "user_id", "raw_review", "review_date"},
-                    "Silver reviews",
+                use_broadcasts=(materialization_mode == "persist"),
+            )
+            silver = materialize_frame(
+                spark,
+                silver_plan,
+                mode=materialization_mode,
+                materialization_schema=args.materialization_schema,
+                stage="silver",
+                run_id=run_id,
+                metadata=metrics,
+                persisted_frames=persisted_frames,
+            )
+            require_columns(
+                silver,
+                {"review_id", "business_id", "user_id", "raw_review", "review_date"},
+                "Silver reviews",
+            )
+            silver_rows = require_nonempty(silver, "Silver reviews")
+            expected_silver_rows = metrics["bronze_rows"]["review"]
+            if silver_rows != expected_silver_rows:
+                raise ValueError(
+                    "Silver row count does not match the selected Bronze review count: "
+                    f"{silver_rows} != {expected_silver_rows}"
                 )
-                silver_rows = require_nonempty(silver, "Silver reviews")
-                expected_silver_rows = metrics["bronze_rows"]["review"]
-                if silver_rows != expected_silver_rows:
-                    raise ValueError(
-                        "Silver row count does not match the selected Bronze review count: "
-                        f"{silver_rows} != {expected_silver_rows}"
-                    )
-                metrics["silver_rows"] = silver_rows
-                metrics["validation"] = validate_spark_at_scale(
-                    silver, text_col="raw_review"
-                )
-                metrics["silver_table"] = table_name(
-                    args.catalog, args.schema, f"{args.table_prefix}_silver_reviews"
-                )
+            metrics["silver_rows"] = silver_rows
+            metrics["validation"] = validate_spark_at_scale(
+                silver, text_col="raw_review"
+            )
+            metrics["silver_table"] = table_name(
+                args.catalog, args.schema, f"{args.table_prefix}_silver_reviews"
+            )
 
-                write_delta_table(silver, metrics["silver_table"], args.mode)
-            finally:
-                silver.unpersist()
-                selected_reviews.unpersist()
+            write_delta_table(silver, metrics["silver_table"], args.mode)
 
         append_audit(spark, audit_table, "bronze_to_silver", "succeeded", metrics)
         print(f"Bronze and Silver tables are ready. Silver: {metrics['silver_table']}")
@@ -496,6 +560,8 @@ def main(argv=None) -> int:
         except Exception as audit_exc:
             print(f"WARNING: failed to append the failure audit record: {audit_exc}")
         raise
+    finally:
+        release_resources(spark, persisted_frames, metrics)
 
 
 if __name__ == "__main__":
