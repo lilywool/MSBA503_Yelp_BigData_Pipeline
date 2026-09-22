@@ -23,10 +23,13 @@ in [docs/MSBA 503 Yelp Analytics Dashboard.pdf](<docs/MSBA 503 Yelp Analytics Da
 
 ### 2026 upgrade: Databricks
 
-The current implementation moves the production-shaped pathway to Databricks:
-the supplied Job runs on Free Edition serverless compute and reads locally
-converted Bronze Parquet plus licensed lexicons from the governed Unity Catalog
-Volume `workspace.default.yelp_raw`.
+The primary 2026 implementation moves the production-shaped pathway to
+Databricks. The supplied Lakeflow Job uses Databricks serverless compute and
+reads locally converted Bronze Parquet plus licensed lexicons from the governed
+Unity Catalog Volume `workspace.default.yelp_raw`. Serverless was selected for
+the Databricks route because it removes cluster administration from the
+three-task workflow while retaining Spark distribution, governed Delta tables,
+and task-level dependency controls.
 
 ```text
 Downloaded Yelp JSON files (outside Git)
@@ -57,6 +60,46 @@ data_science_dashboard_yelp
 Databricks Streamlit App
   deployable interface over the dashboard-serving tables
 ```
+
+### 2026 maintained alternative: AWS EMR
+
+The AWS route is also a current implementation, not merely an archive of the
+coursework environment. Amazon EMR supports both serverless applications and
+transient EC2-backed clusters. This repository intentionally uses a transient
+EMR on EC2 job cluster because that preserves the methodology of the original
+MSBA 503 deployment while modernizing it into the same complete medallion-shaped
+pipeline as the Databricks route. EMR provisions a driver and worker nodes for
+the ordered workload, uses classic Spark/YARN materialization, and terminates
+the cluster automatically after success or on the first failed step.
+
+```text
+Yelp JSON-lines files in S3
+        |
+        v
+explicit-schema JSON -> Bronze-source Parquet
+        |
+        v
+bronze_to_silver_yelp
+  scoped Bronze tables + canonical review/business/user join
+  + selected NLP, lexicon, grammar, and time features
+        |
+        v
+silver_to_gold_yelp
+  parameterized analytical variant
+        |
+        v
+data_science_dashboard_yelp
+  S3 Parquet serving tables registered in AWS Glue
+        |
+        v
+Athena and downstream dashboard consumers
+```
+
+Databricks and EMR therefore share the feature and analytical contracts without
+pretending their runtimes are identical: Databricks uses serverless Spark
+Connect, Unity Catalog, Delta, and temporary managed Delta materialization; EMR
+uses a transient EC2 cluster, YARN, S3 Parquet, Glue/Athena, executor broadcasts,
+and `persist()`/`unpersist()`.
 
 ### Configure a run by purpose
 
@@ -125,8 +168,7 @@ batches, preventing separate local and cloud feature definitions.
 
 Spark provides distribution rather than a second NLP implementation. Each
 executor receives bounded Arrow/pandas batches; pandas never receives the full
-6,990,280-review corpus at once. There is no Spark NLP JAR or JVM-side feature
-logic. The standard Databricks feature set excludes transformers; transformer
+6,990,280-review corpus at once. The standard Databricks feature set excludes transformers; transformer
 inference is an explicit opt-in that requires its separate model runtime and
 suitable compute. The coursework-era SageMaker work remains part of the
 historical AWS story.
@@ -175,15 +217,12 @@ least-privilege access; no token or password is stored in this repository.
 
 ## AWS EMR pathway
 
-`aws_emr/` provides a current EMR-native mirror of the three Databricks stages:
-Bronze-to-Silver, parameterized Silver-to-Gold, and dashboard-serving outputs.
-It uses S3 Parquet, AWS Glue/Athena, classic Spark persistence, a deterministic
-executor package, and a transient job cluster. It shares the canonical feature
-and analytical contracts without copying Databricks-specific Delta or Spark
-Connect behavior. The deployment installs no Spark NLP or custom Java stack.
-This pathway both documents the course platform and remains a viable alternative
-deployment.
-See `aws_emr/README.md`.
+`aws_emr/` contains the EMR-native scripts, deterministic executor package,
+bootstrap action, validated `RunJobFlow` template, and guarded launcher for the
+current AWS implementation described above. It processes all five Yelp source
+datasets and publishes Bronze, Silver, Gold, and dashboard-serving outputs to
+S3 with Glue registrations. See `aws_emr/README.md` for the S3 layout, IAM
+boundary, configuration placeholders, canary sequence, and launch procedure.
 
 ## Local verification
 
@@ -202,8 +241,8 @@ tests, and any skipped test. A genuine pass ends with:
 GENUINE PASS: N tests executed; 0 failures, 0 errors, 0 skips.
 ```
 
-The current pinned WSL2 verification completed 23 tests with no failures, errors,
-or skips on 2026-09-21. Corrected local-versus-Spark parity also passed on two
+The current pinned WSL2 verification completed 27 tests with no failures, errors,
+or skips on 2026-09-22. Corrected local-versus-Spark parity also passed on two
 disjoint 1,500-row slices across all 68 expected feature columns. The exact
 environment, commands, evidence boundary, implementation architecture, and
 Databricks task parameters are consolidated in the

@@ -7,7 +7,12 @@ experiments in SageMaker. That history is preserved in
 
 This directory is the maintained 2026 AWS implementation. It mirrors the
 logical Databricks pipeline without pretending the platforms have identical
-runtimes:
+runtimes. Amazon EMR can run Spark through EMR Serverless or through
+EC2-backed clusters. This implementation deliberately uses a transient EMR on
+EC2 job cluster: it preserves the distributed-cluster methodology of the
+original MSBA 503 project while extending that work into a complete
+Bronze-to-Silver, Silver-to-Gold, and dashboard-serving medallion pipeline. The
+cluster terminates after the ordered steps succeed or on the first failure.
 
 ```text
 S3 raw JSON
@@ -22,14 +27,6 @@ Databricks uses Unity Catalog, Delta, Spark Connect, and temporary Delta
 materialization. EMR uses classic Spark on YARN, S3 Parquet, the Glue metastore,
 executor broadcasts, and `persist()`/`unpersist()`. Both routes use the same
 canonical feature code and the same Gold/dashboard transformation contracts.
-
-## No Spark NLP or custom Java stack
-
-This deployment does **not** use John Snow Labs Spark NLP, Maven coordinates,
-extra NLP JARs, license keys, or JVM classpath modifications. EMR supplies its
-managed Linux Spark/Java runtime. `bootstrap.sh` installs only the pinned Python
-feature stack and does not install Java, overwrite `JAVA_HOME`, or depend on
-Windows Hadoop utilities.
 
 ## Maintained tasks
 
@@ -56,7 +53,7 @@ do not share a review-level key.
 - `scripts/silver_to_gold.py`: EMR-native parameterized Gold task.
 - `scripts/data_science_dashboard.py`: EMR-native serving-table task.
 - `scripts/emr_common.py`: validated S3, Glue-table, audit, and cleanup helpers.
-- `bootstrap.sh`: pinned Python NLP environment; no Java or Spark NLP changes.
+- `bootstrap.sh`: pinned Python NLP environment for the EMR workers.
 - `build_pipeline_package.py`: deterministic executor dependency archive.
 - `launch_cluster.py`: validates placeholders and calls the EMR `RunJobFlow`
   API with the checked-in template.
