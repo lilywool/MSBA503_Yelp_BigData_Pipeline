@@ -45,11 +45,14 @@ class DatabricksContractTests(unittest.TestCase):
             [{"task_key": "silver_to_gold_yelp"}],
         )
         parameters = tasks["bronze_to_silver_yelp"]["spark_python_task"]["parameters"]
-        self.assertIn("--google-drive-folder-url", parameters)
-        self.assertIn("--google-drive-connection", parameters)
+        self.assertIn("--input-volume", parameters)
+        self.assertIn("{{job.parameters.input_volume}}", parameters)
+        self.assertIn("--lexicons-dir", parameters)
+        self.assertIn("{{job.parameters.lexicons_dir}}", parameters)
         self.assertIn("--silver-sample-size", parameters)
         self.assertIn("{{job.parameters.silver_sample_size}}", parameters)
-        self.assertNotIn("--lexicons-dir", parameters)
+        self.assertNotIn("--google-drive-folder-url", parameters)
+        self.assertNotIn("--google-drive-connection", parameters)
         self.assertIn("--partitions", parameters)
         self.assertIn("--materialization-mode", parameters)
         self.assertIn("{{job.parameters.materialization_mode}}", parameters)
@@ -73,8 +76,17 @@ class DatabricksContractTests(unittest.TestCase):
         self.assertEqual(defaults["gold_sample_size"], "5000")
         self.assertEqual(defaults["materialization_mode"], "auto")
         self.assertEqual(defaults["materialization_schema"], "workspace.default")
+        self.assertEqual(
+            defaults["input_volume"],
+            "/Volumes/workspace/default/yelp_raw/bronze",
+        )
+        self.assertEqual(
+            defaults["lexicons_dir"],
+            "/Volumes/workspace/default/yelp_raw/lexicons",
+        )
         serialized = json.dumps(config)
-        self.assertNotIn("/Volumes/", serialized)
+        self.assertIn("/Volumes/workspace/default/yelp_raw/bronze", serialized)
+        self.assertIn("/Volumes/workspace/default/yelp_raw/lexicons", serialized)
         self.assertNotIn("job_clusters", config)
         self.assertNotIn("job_cluster_key", serialized)
         self.assertEqual(config["format"], "MULTI_TASK")

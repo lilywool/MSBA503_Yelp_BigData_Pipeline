@@ -7,31 +7,21 @@ It follows one Lakeflow Job with three ordered Python tasks:
 bronze_to_silver_yelp -> silver_to_gold_yelp -> data_science_dashboard_yelp
 ```
 
-The job reads the Yelp Academic Dataset directly from an authenticated Google
-Drive connection, writes bounded governed Delta tables in `workspace.default`,
-validates the feature layer before publication, and finishes with three
-dashboard-serving tables.
+The job reads locally converted Bronze Parquet and licensed lexicons from a
+Unity Catalog Volume, writes bounded governed Delta tables in
+`workspace.default`, validates the feature layer before publication, and
+finishes with three dashboard-serving tables.
 
-## Inputs already selected for this deployment
+## Prepare the governed input Volume
 
-Use this Google Drive layout:
+The large JSON-lines download is converted locally before it enters
+Databricks. This avoids committing data to Git, avoids fragile multi-gigabyte
+remote-file streams, and gives Spark partitioned, compressed input that it can
+read concurrently.
 
-```text
-Yelp RAW Databricks/
-|-- yelp_academic_dataset_business.json
-|-- yelp_academic_dataset_checkin.json
-|-- yelp_academic_dataset_review.json
-|-- yelp_academic_dataset_tip.json
-|-- yelp_academic_dataset_user.json
-`-- Lexicons/
-    |-- NRC-Emotion-Intensity-Lexicon-v1.txt
-    |-- NRC-VAD-Lexicon-v2.1.txt
-    |-- NRC-WCST-Lexicon-v1.0.txt
-    |-- worrywords-v1.txt
-    `-- Yelp-restaurant-reviews-AFFLEX-NEGLEX-unigrams.txt
-```
+### 1. Download and extract the Yelp Academic Dataset
 
-The five JSON-lines files at the root are:
+Keep the five source files outside this repository:
 
 ```text
 yelp_academic_dataset_business.json
@@ -41,18 +31,80 @@ yelp_academic_dataset_tip.json
 yelp_academic_dataset_user.json
 ```
 
-Create a Unity Catalog Google Drive connection and supply the folder URL and
-connection name through the job parameters `google_drive_folder_url` and
-`google_drive_connection`. The task uses a filename filter and an explicit
-schema for each source. It also recursively discovers the five exact lexicon
-filenames in the `Lexicons` subfolder, stages their bytes only for the duration
-of the run, and distributes those small payloads to serverless Spark workers.
-Neither the raw dataset nor
-the licensed lexicons are copied into Git or an input Volume.
+### 2. Convert JSON to Parquet locally
 
-If the lexicons are ever moved to a different Drive folder, pass that folder's
-URL with `--google-drive-lexicons-folder-url`. The supplied Job template needs
-only the parent `Yelp RAW Databricks` URL.
+Use Linux or WSL2 with the repository's pinned Python 3.11 and Java 17
+environment. Keep the repository checkout and generated Parquet in the Linux
+filesystem; `RAW_ROOT` may point to an extracted Windows folder through
+`/mnt/c/...`.
+
+```bash
+cd ~/yelp_pipeline
+./scripts/bootstrap_local.sh
+
+RAW_ROOT="/mnt/c/path/to/extracted/yelp_json"
+PARQUET_ROOT="$HOME/yelp_parquet"
+mkdir -p "$PARQUET_ROOT" "$HOME/yelp_spark_tmp"
+
+export PYSPARK_PYTHON="$PWD/.venv/bin/python"
+export PYSPARK_DRIVER_PYTHON="$PWD/.venv/bin/python"
+
+"$PWD/.venv/bin/spark-submit" \
+  --master "local[4]" \
+  --driver-memory 4g \
+  --conf "spark.sql.shuffle.partitions=64" \
+  --conf "spark.local.dir=$HOME/yelp_spark_tmp" \
+  pipeline/bronze_json_to_parquet.py \
+  --input-root "$RAW_ROOT" \
+  --output-root "$PARQUET_ROOT" \
+  --datasets business checkin tip user review \
+  --review-partitions 64 \
+  --business-partitions 4 \
+  --user-partitions 32 \
+  --checkin-partitions 4 \
+  --tip-partitions 8
+```
+
+The converter uses explicit schemas, writes Snappy-compressed Parquet, and
+places an `_SUCCESS` marker in each completed dataset directory. It is safe to
+rerun: completed directories are skipped unless `--overwrite` is deliberately
+supplied. A successful conversion produces:
+
+```text
+~/yelp_parquet/
+|-- yelp_academic_dataset_business/
+|-- yelp_academic_dataset_checkin/
+|-- yelp_academic_dataset_review/
+|-- yelp_academic_dataset_tip/
+`-- yelp_academic_dataset_user/
+```
+
+### 3. Upload Parquet and lexicons to Unity Catalog
+
+Create the Volume `workspace.default.yelp_raw`, then create `bronze/` and
+`lexicons/` inside it. Upload each Parquet dataset directory without flattening
+or combining schemas:
+
+```text
+/Volumes/workspace/default/yelp_raw/
+|-- bronze/
+|   |-- yelp_academic_dataset_business/   [part-*.snappy.parquet]
+|   |-- yelp_academic_dataset_checkin/    [part-*.snappy.parquet]
+|   |-- yelp_academic_dataset_review/     [part-*.snappy.parquet]
+|   |-- yelp_academic_dataset_tip/        [part-*.snappy.parquet]
+|   `-- yelp_academic_dataset_user/       [part-*.snappy.parquet]
+`-- lexicons/
+    |-- NRC-Emotion-Intensity-Lexicon-v1.txt
+    |-- NRC-VAD-Lexicon-v2.1.txt
+    |-- NRC-WCST-Lexicon-v1.0.txt
+    |-- worrywords-v1.txt
+    `-- Yelp-restaurant-reviews-AFFLEX-NEGLEX-unigrams.txt
+```
+
+Upload `part-*.snappy.parquet`; `_SUCCESS` is optional. Do not upload `.crc`
+files because they are local Hadoop checksum sidecars. Upload only the five
+licensed `.txt` lexicons. Neither raw JSON, generated Parquet, nor lexicon
+contents belongs in Git.
 
 The maintained Job uses Databricks Free Edition serverless compute. Its shared
 Python environment is declared in `job_config.json` with environment version 5
@@ -97,10 +149,11 @@ This task owns all feature-engine and scaling choices:
   standard family except `transformers`.
 - `--partitions` and `--arrow-batch-size` control Spark distribution and the
   bounded pandas batch size.
-- With a Google Drive source, the five licensed lexicons are discovered in the
-  same folder tree automatically. `--google-drive-lexicons-folder-url` can
-  point to a different Drive folder. `--lexicons-dir` and the five individual
-  overrides remain available only for alternate non-Drive deployments.
+- `--input-volume` with `/Volumes/workspace/default/yelp_raw/bronze` selects the
+  five locally staged Parquet directories. `--lexicons-dir` with
+  `/Volumes/workspace/default/yelp_raw/lexicons` selects the licensed resources.
+  The five individual lexicon overrides remain available when a deployment
+  stores those files separately.
 
 The serverless environment installs the standard spaCy, VADER, NRC, TextBlob,
 and NLTK feature libraries while retaining the runtime's own pandas, NumPy,
@@ -202,32 +255,33 @@ Jobs UI, edit the job parameter key/value pairs or use **Run now with different
 parameters**; the task JSON resolves them into script arguments.
 
 1. Push the public repository and connect it to the Databricks workspace.
-2. Create the Google Drive connection. Confirm the five JSON files are at the
-   `Yelp RAW Databricks` root and the five lexicons are in its `Lexicons`
-   subfolder under the exact filenames shown above.
-3. In **Workflows > Jobs**, create a job that uses this GitHub repository and
+2. Convert the five downloaded JSON-lines files locally with
+   `pipeline/bronze_json_to_parquet.py` and confirm all five output directories
+   contain `_SUCCESS`.
+3. Create `workspace.default.yelp_raw`; upload only the Parquet part files to
+   its `bronze/` hierarchy and the five exact lexicon files to `lexicons/`.
+4. In **Workflows > Jobs**, create a job that uses this GitHub repository and
    branch `main` as its Git source.
-4. Add the three Python script tasks in the order shown above. Their relative
+5. Add the three Python script tasks in the order shown above. Their relative
    paths and parameters are in `job_config.json`; Git paths do not begin with
    `/` or `./`.
-5. Choose **Serverless** compute. Assign all three tasks the shared environment
+6. Choose **Serverless** compute. Assign all three tasks the shared environment
    key `yelp_pipeline`, Standard environment version `5`, and the two dependencies
    shown above. Do not add a classic cluster, node type, or init script.
-6. Set the job parameters before each run. `silver_sample_size` controls the
+7. Set the job parameters before each run. `silver_sample_size` controls the
    bounded Bronze/Silver population; `gold_sample_size` independently controls
    the row-level Gold/dashboard population. Start with 25,000 and 5,000,
    respectively, and inspect table sizes plus the audit before increasing them.
 
-The JSON file is a Jobs API-style template. Replace the Google Drive folder URL
-placeholder before importing or submitting it. The maintained
-Job uses Google Drive for both raw inputs and lexicons. The script retains
-`--input-volume` only as an explicit alternative for other full-workspace
-deployments; it never falls back to a Volume implicitly.
+The JSON file is a Jobs API-style template. The maintained Job passes
+`--input-volume /Volumes/workspace/default/yelp_raw/bronze` and
+`--lexicons-dir /Volumes/workspace/default/yelp_raw/lexicons` explicitly; it
+does not fall back to either location implicitly.
 
 Databricks documentation used for this layout:
 
 - [Use Git with Lakeflow Jobs](https://docs.databricks.com/aws/en/jobs/git)
 - [Python script task for jobs](https://docs.databricks.com/aws/en/jobs/tasks/python-script)
-- [Ingest files from Google Drive](https://docs.databricks.com/gcp/en/ingestion/google-drive)
+- [Work with files in Unity Catalog Volumes](https://docs.databricks.com/aws/en/volumes/volume-files)
 - [Serverless compute limitations](https://docs.databricks.com/aws/en/compute/serverless/limitations)
 - [Serverless environment dependencies](https://docs.databricks.com/aws/en/compute/serverless/dependencies)

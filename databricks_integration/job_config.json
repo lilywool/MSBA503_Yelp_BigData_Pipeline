@@ -3,12 +3,12 @@
   "max_concurrent_runs": 1,
   "parameters": [
     {
-      "name": "google_drive_folder_url",
-      "default": "REPLACE_WITH_GOOGLE_DRIVE_FOLDER_URL"
+      "name": "input_volume",
+      "default": "/Volumes/workspace/default/yelp_raw/bronze"
     },
     {
-      "name": "google_drive_connection",
-      "default": "yelp_google_drive"
+      "name": "lexicons_dir",
+      "default": "/Volumes/workspace/default/yelp_raw/lexicons"
     },
     {
       "name": "silver_sample_size",
@@ -48,8 +48,8 @@
         "python_file": "databricks_integration/scripts/bronze_to_silver.py",
         "source": "GIT",
         "parameters": [
-          "--google-drive-folder-url", "{{job.parameters.google_drive_folder_url}}",
-          "--google-drive-connection", "{{job.parameters.google_drive_connection}}",
+          "--input-volume", "{{job.parameters.input_volume}}",
+          "--lexicons-dir", "{{job.parameters.lexicons_dir}}",
           "--catalog", "workspace",
           "--schema", "default",
           "--table-prefix", "yelp",

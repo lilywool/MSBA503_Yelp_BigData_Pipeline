@@ -24,11 +24,19 @@ in [docs/MSBA 503 Yelp Analytics Dashboard.pdf](<docs/MSBA 503 Yelp Analytics Da
 ### 2026 upgrade: Databricks
 
 The current implementation moves the production-shaped pathway to Databricks:
-the supplied Job runs on Free Edition serverless compute and keeps the raw Yelp
-files plus licensed lexicons in the authenticated Google Drive source tree.
+the supplied Job runs on Free Edition serverless compute and reads locally
+converted Bronze Parquet plus licensed lexicons from the governed Unity Catalog
+Volume `workspace.default.yelp_raw`.
 
 ```text
-Yelp JSON files in Google Drive
+Downloaded Yelp JSON files (outside Git)
+        |
+        v
+local explicit-schema JSON -> Parquet conversion
+        |
+        v
+/Volumes/workspace/default/yelp_raw/
+  bronze/ + lexicons/
         |
         v
 bronze_to_silver_yelp
@@ -54,9 +62,10 @@ Databricks Streamlit App
 
 Each run makes a small set of deliberate choices:
 
-- **Source:** read the five raw Yelp files and the licensed lexicons from an
-  authorized Google Drive folder tree while keeping code in the connected Git
-  repository. The dataset and lexicon contents are never committed.
+- **Source:** convert the five downloaded Yelp JSON-lines files to partitioned
+  Parquet locally, upload the five dataset directories and licensed lexicons to
+  `workspace.default.yelp_raw`, and keep both source data and generated files
+  outside Git.
 - **Workload:** choose how many reviews reach Silver and receive the selected
   feature engineering.
 - **Features:** run the complete standard NLP stack or select only the
@@ -95,7 +104,7 @@ batches, preventing separate local and cloud feature definitions.
 
 Spark provides distribution rather than a second NLP implementation. Each
 executor receives bounded Arrow/pandas batches; pandas never receives the full
-8.6-million-row corpus at once. There is no Spark NLP JAR or JVM-side feature
+6,990,280-review corpus at once. There is no Spark NLP JAR or JVM-side feature
 logic. The standard Databricks feature set excludes transformers; transformer
 inference is an explicit opt-in that requires its separate model runtime and
 suitable compute. The coursework-era SageMaker work remains part of the
@@ -168,7 +177,7 @@ tests, and any skipped test. A genuine pass ends with:
 GENUINE PASS: N tests executed; 0 failures, 0 errors, 0 skips.
 ```
 
-The current pinned WSL2 verification completed 20 tests with no failures, errors,
+The current pinned WSL2 verification completed 23 tests with no failures, errors,
 or skips on 2026-09-21. Corrected local-versus-Spark parity also passed on two
 disjoint 1,500-row slices across all 68 expected feature columns. The exact
 environment, commands, evidence boundary, implementation architecture, and
@@ -185,7 +194,7 @@ Databricks task parameters are consolidated in the
 - [x] Delta audit and dashboard-serving contracts
 - [x] Deployable Databricks Streamlit app
 - [ ] Databricks serverless canary recorded in `yelp_pipeline_audit`
-- [ ] Full 8.6-million-review Databricks run
+- [ ] Full 6,990,280-review Databricks run
 - [ ] Dashboard app deployed and share URL recorded
 
 The unchecked items require the configured Databricks workspace and incur cloud
