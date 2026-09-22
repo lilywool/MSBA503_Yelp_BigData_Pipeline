@@ -54,7 +54,10 @@ def parse_args(argv=None):
     source.add_argument(
         "--input-volume",
         default=None,
-        help="Volume/local/object-storage directory containing the five Yelp JSON files.",
+        help=(
+            "Volume/local/object-storage directory containing the five Yelp "
+            "Parquet dataset directories produced by bronze_json_to_parquet.py."
+        ),
     )
     source.add_argument(
         "--google-drive-folder-url",
@@ -233,7 +236,7 @@ def _google_drive_file_url(
     return matches[0]["path"]
 
 
-def _read_json(
+def _read_dataset(
     spark,
     spec,
     *,
@@ -241,12 +244,6 @@ def _read_json(
     google_drive_folder_url: str | None,
     google_drive_connection: str | None,
 ):
-    reader = (
-        spark.read
-        .schema(spec.schema)
-        .option("mode", "FAILFAST")
-        .option("multiLine", False)
-    )
     if google_drive_folder_url:
         file_url = _google_drive_file_url(
             spark,
@@ -255,12 +252,17 @@ def _read_json(
             filename=spec.filename,
         )
         frame = (
-            reader.option("databricks.connection", google_drive_connection)
+            spark.read
+            .schema(spec.schema)
+            .option("mode", "FAILFAST")
+            .option("multiLine", False)
+            .option("databricks.connection", google_drive_connection)
             .format("json")
             .load(file_url)
         )
     else:
-        frame = reader.json(join_path(input_volume, spec.filename))
+        parquet_path = join_path(input_volume, spec.output_dirname)
+        frame = spark.read.schema(spec.schema).parquet(parquet_path)
     return (
         frame
         .withColumn("_source_file", F.col("_metadata.file_path"))
@@ -424,7 +426,7 @@ def main(argv=None) -> int:
         destinations = {}
         review_spec = DATASETS["review"]
         selected_reviews_plan = sample_reviews(
-            _read_json(
+            _read_dataset(
                 spark,
                 review_spec,
                 input_volume=args.input_volume,
@@ -449,7 +451,7 @@ def main(argv=None) -> int:
             if dataset_name == "review":
                 frame = selected_reviews
             else:
-                source_frame = _read_json(
+                source_frame = _read_dataset(
                     spark,
                     spec,
                     input_volume=args.input_volume,

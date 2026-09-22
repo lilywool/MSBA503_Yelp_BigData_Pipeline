@@ -34,7 +34,7 @@ class BronzeConverterTests(unittest.TestCase):
 
     def test_review_conversion_is_explicit_and_idempotent(self):
         from bronze_json_to_parquet import DATASETS, convert_dataset
-        from bronze_to_silver import _read_json
+        from bronze_to_silver import _read_dataset
 
         self.assertEqual(
             set(DATASETS), {"review", "business", "checkin", "tip", "user"}
@@ -62,7 +62,7 @@ class BronzeConverterTests(unittest.TestCase):
                 "\n".join(json.dumps(row) for row in rows) + "\n",
                 encoding="utf-8",
             )
-            output = root / "reviews_parquet"
+            output = root / spec.output_dirname
             first = convert_dataset(
                 self.spark, spec, str(source), str(output), partitions=2
             )
@@ -77,7 +77,7 @@ class BronzeConverterTests(unittest.TestCase):
             self.assertEqual(converted.schema["stars"].dataType.simpleString(), "double")
             self.assertNotIn("unknown_future_field", converted.columns)
 
-            databricks_bronze = _read_json(
+            databricks_bronze = _read_dataset(
                 self.spark,
                 spec,
                 input_volume=str(root),
@@ -88,8 +88,11 @@ class BronzeConverterTests(unittest.TestCase):
                 row["_source_file"]
                 for row in databricks_bronze.select("_source_file").distinct().collect()
             }
-            self.assertEqual(len(source_paths), 1)
-            self.assertTrue(next(iter(source_paths)).endswith(spec.filename))
+            self.assertTrue(source_paths)
+            self.assertTrue(
+                all(spec.output_dirname in path for path in source_paths)
+            )
+            self.assertTrue(all(path.endswith(".parquet") for path in source_paths))
 
 
 if __name__ == "__main__":
