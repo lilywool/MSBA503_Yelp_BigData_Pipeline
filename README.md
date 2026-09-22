@@ -77,6 +77,27 @@ Each run makes a small set of deliberate choices:
 - **Presentation:** build the dashboard-serving layer directly from the chosen
   row-level Gold result.
 
+### Stage the Databricks inputs
+
+After converting the five JSON-lines files locally, open **Catalog Explorer >
+workspace > default > yelp_raw > Files**. Create `bronze/` and `lexicons/` in
+the Volume. Inside `bronze/`, create these five directories exactly:
+
+```text
+yelp_academic_dataset_business/
+yelp_academic_dataset_checkin/
+yelp_academic_dataset_review/
+yelp_academic_dataset_tip/
+yelp_academic_dataset_user/
+```
+
+Open each generated folder under the WSL output `~/yelp_parquet`, select its
+`part-*.snappy.parquet` files, and drag/drop them into the matching Databricks
+directory. Drag/drop the five licensed `.txt` files into `lexicons/`. Do not
+flatten the five Parquet schemas into the Volume root and do not upload local
+Hadoop `.crc` files. `_SUCCESS` is optional. The detailed conversion command,
+expected file counts, and task paths are in the illustrated guide below.
+
 Silver and Gold have independent limits. If a requested Gold sample is larger
 than the eligible Silver population, the pipeline safely uses the available
 rows and records both values. The illustrated

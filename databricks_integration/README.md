@@ -81,9 +81,11 @@ supplied. A successful conversion produces:
 
 ### 3. Upload Parquet and lexicons to Unity Catalog
 
-Create the Volume `workspace.default.yelp_raw`, then create `bronze/` and
-`lexicons/` inside it. Upload each Parquet dataset directory without flattening
-or combining schemas:
+In **Catalog Explorer**, create the Volume `workspace.default.yelp_raw` and open
+its **Files** tab. Select **Create directory** twice to create `bronze` and
+`lexicons`. Open `bronze`, then use **Create directory** five more times to
+create the exact dataset directories shown below. Do not upload the five
+datasets as loose files at the Volume root and do not combine their schemas.
 
 ```text
 /Volumes/workspace/default/yelp_raw/
@@ -101,10 +103,26 @@ or combining schemas:
     `-- Yelp-restaurant-reviews-AFFLEX-NEGLEX-unigrams.txt
 ```
 
-Upload `part-*.snappy.parquet`; `_SUCCESS` is optional. Do not upload `.crc`
-files because they are local Hadoop checksum sidecars. Upload only the five
-licensed `.txt` lexicons. Neither raw JSON, generated Parquet, nor lexicon
-contents belongs in Git.
+In Windows File Explorer, open the completed WSL output at
+`\\wsl.localhost\Ubuntu\home\<WSL_USER>\yelp_parquet`. Open one generated
+dataset folder at a time, select its `part-*.snappy.parquet` files, and
+drag/drop them into the matching directory in the Databricks browser. Keep the
+upload page open until that dataset finishes, then continue with the next one.
+The expected Parquet counts are:
+
+| Directory | Parquet files |
+|---|---:|
+| `yelp_academic_dataset_business` | 4 |
+| `yelp_academic_dataset_checkin` | 4 |
+| `yelp_academic_dataset_review` | 64 |
+| `yelp_academic_dataset_tip` | 8 |
+| `yelp_academic_dataset_user` | 32 |
+
+Open `lexicons` in Databricks, select the five licensed `.txt` files from their
+local folder, and drag/drop them in the same manner. `_SUCCESS` is optional. Do
+not upload `.crc` files because they are local Hadoop checksum sidecars. The
+completed Volume contains 112 Parquet parts and five lexicons. Neither raw
+JSON, generated Parquet, nor lexicon contents belongs in Git.
 
 The maintained Job uses Databricks Free Edition serverless compute. Its shared
 Python environment is declared in `job_config.json` with environment version 5
@@ -258,8 +276,10 @@ parameters**; the task JSON resolves them into script arguments.
 2. Convert the five downloaded JSON-lines files locally with
    `pipeline/bronze_json_to_parquet.py` and confirm all five output directories
    contain `_SUCCESS`.
-3. Create `workspace.default.yelp_raw`; upload only the Parquet part files to
-   its `bronze/` hierarchy and the five exact lexicon files to `lexicons/`.
+3. Create `workspace.default.yelp_raw`, create `bronze/` and `lexicons/`, then
+   create the five exact dataset directories inside `bronze/`. Drag/drop each
+   WSL Parquet folder's part files into its matching directory and the five
+   lexicons into `lexicons/`.
 4. In **Workflows > Jobs**, create a job that uses this GitHub repository and
    branch `main` as its Git source.
 5. Add the three Python script tasks in the order shown above. Their relative
