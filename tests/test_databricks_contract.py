@@ -12,7 +12,9 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(REPO_ROOT / "pipeline"))
 
 from common import (
+    IDENTIFIER,
     materialize_frame,
+    new_run_id,
     parse_materialization_schema,
     release_resources,
     resolve_materialization_mode,
@@ -22,6 +24,12 @@ from corrected_feature_engineering import output_columns_for
 
 
 class DatabricksContractTests(unittest.TestCase):
+    def test_generated_run_ids_are_valid_unity_catalog_identifiers(self):
+        for _ in range(256):
+            run_id = new_run_id()
+            self.assertTrue(IDENTIFIER.fullmatch(run_id), run_id)
+            self.assertTrue(run_id.startswith("r_"), run_id)
+
     def test_job_has_ordered_tasks_and_independent_sample_controls(self):
         config = json.loads(
             (REPO_ROOT / "databricks_integration" / "job_config.json").read_text()

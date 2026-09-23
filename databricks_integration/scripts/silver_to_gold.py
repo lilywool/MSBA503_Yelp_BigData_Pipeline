@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from uuid import uuid4
 
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
@@ -38,6 +37,7 @@ from common import (  # noqa: E402
     append_audit,
     ensure_schema,
     materialize_frame,
+    new_run_id,
     parse_materialization_schema,
     release_resources,
     resolve_materialization_mode,
@@ -105,7 +105,7 @@ def main(argv=None) -> int:
         args.catalog, args.schema, f"{args.table_prefix}_gold_{args.gold_level.replace('-', '_')}"
     )
     audit_table = table_name(args.catalog, args.schema, f"{args.table_prefix}_pipeline_audit")
-    run_id = uuid4().hex
+    run_id = new_run_id()
     metrics = {
         "input_table": input_table,
         "output_table": output_table,

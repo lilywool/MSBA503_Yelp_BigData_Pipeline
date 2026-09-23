@@ -7,7 +7,6 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from uuid import uuid4
 
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
@@ -38,6 +37,7 @@ from common import (  # noqa: E402
     append_audit,
     ensure_schema,
     materialize_frame,
+    new_run_id,
     parse_materialization_schema,
     release_resources,
     require_columns,
@@ -374,7 +374,7 @@ def main(argv=None) -> int:
     ensure_schema(spark, args.catalog, args.schema)
     ensure_schema(spark, materialization_catalog, materialization_schema)
     audit_table = table_name(args.catalog, args.schema, f"{args.table_prefix}_pipeline_audit")
-    run_id = uuid4().hex
+    run_id = new_run_id()
     metrics = {
         "input_source": (
             {

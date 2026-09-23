@@ -5,10 +5,16 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+from uuid import uuid4
 
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MATERIALIZATION_MODES = ("auto", "persist", "delta", "none")
+
+
+def new_run_id() -> str:
+    """Return a collision-resistant identifier valid for Unity Catalog names."""
+    return f"r_{uuid4().hex}"
 
 
 def table_name(catalog: str, schema: str, name: str) -> str:
