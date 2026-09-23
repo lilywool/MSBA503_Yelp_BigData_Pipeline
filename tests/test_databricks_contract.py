@@ -153,6 +153,17 @@ class DatabricksContractTests(unittest.TestCase):
             self.assertNotIn("__file__", namespace)
             self.assertEqual(namespace["SCRIPT_PATH"], script.resolve())
 
+    def test_serverless_entrypoints_do_not_raise_system_exit_on_success(self):
+        """IPython-backed serverless tasks treat even SystemExit(0) as failure."""
+        for script_name in (
+            "bronze_to_silver.py",
+            "silver_to_gold.py",
+            "data_science_dashboard.py",
+        ):
+            source = (SCRIPTS / script_name).read_text(encoding="utf-8")
+            self.assertNotIn("raise SystemExit(main())", source, script_name)
+            self.assertIn('if __name__ == "__main__":\n    main()', source, script_name)
+
     def test_serverless_managed_arrow_configs_are_optional(self):
         from bronze_to_silver import configure_arrow_runtime
 
