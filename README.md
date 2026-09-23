@@ -269,7 +269,7 @@ Databricks task parameters are consolidated in the
 - [x] Three-task Databricks job implementation
 - [x] Delta audit and dashboard-serving contracts
 - [x] Deployable Databricks Streamlit app
-- [ ] Databricks serverless canary recorded in `yelp_pipeline_audit`
+- [x] 1,000-review Databricks serverless canary recorded in `yelp_pipeline_audit`
 - [ ] Full 6,990,280-review Databricks run
 - [ ] Dashboard app deployed and share URL recorded
 
