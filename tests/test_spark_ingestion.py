@@ -37,9 +37,9 @@ class JoinedInputTests(unittest.TestCase):
             ("r2", "u2", "b2", 2.0, "2021-02-03", "Slow haircut."),
         ], ["review_id", "user_id", "business_id", "stars", "date", "text"])
         businesses = self.spark.createDataFrame([
-            ("b1", "Taco Shop", "A", "CA", 4.2, 50, 1, "Restaurants, Mexican, Tacos"),
-            ("b2", "Hair Shop", "B", "CA", 3.5, 20, 1, "Hair Salons, Beauty"),
-        ], ["business_id", "name", "city", "state", "stars", "review_count", "is_open", "categories"])
+            ("b1", "Taco Shop", "A", "CA", 32.71, -117.16, 4.2, 50, 1, "Restaurants, Mexican, Tacos"),
+            ("b2", "Hair Shop", "B", "CA", 34.05, -118.24, 3.5, 20, 1, "Hair Salons, Beauty"),
+        ], ["business_id", "name", "city", "state", "latitude", "longitude", "stars", "review_count", "is_open", "categories"])
         users = self.spark.createDataFrame([
             ("u1", "One", 8, 4.5),
             ("u2", "Two", 3, 2.5),
@@ -60,7 +60,7 @@ class JoinedInputTests(unittest.TestCase):
             self.assertEqual(result.count(), 2)
             self.assertTrue({
                 "raw_review", "review_date", "year_month", "name",
-                "user_name", "user_stars_avg", "primary_industry",
+                "user_name", "user_stars_avg", "latitude", "longitude", "primary_industry",
                 "secondary_industry", "tertiary_industry",
             }.issubset(result.columns))
 
@@ -69,6 +69,8 @@ class JoinedInputTests(unittest.TestCase):
             self.assertEqual(taco["secondary_industry"], "Mexican")
             self.assertEqual(taco["tertiary_industry"], "Tacos")
             self.assertEqual(taco["year_month"], "2021-01")
+            self.assertAlmostEqual(taco["latitude"], 32.71)
+            self.assertAlmostEqual(taco["longitude"], -117.16)
 
             hair = result.where("review_id = 'r2'").first().asDict()
             self.assertEqual(hair["primary_industry"], "Hair Salons")

@@ -52,13 +52,13 @@ class DashboardTransformTests(unittest.TestCase):
         )
 
         rows = [
-            ("r1", "b1", "Cafe One", "A", "CA", "Restaurants", 5.0, "2021-01", "2021-01-01", 0.8, 0.1, 0.1, 0.1, 0.8, "brand-sample", "Cafe"),
-            ("r2", "b1", "Cafe One", "A", "CA", "Restaurants", 1.0, "2021-01", "2021-01-02", -0.8, 0.8, 0.4, 0.7, 0.1, "brand-sample", "Cafe"),
-            ("r3", "b2", "Salon Two", "B", "CA", "Hair Salons", 4.0, "2021-02", "2021-02-01", 0.5, 0.1, 0.1, 0.1, 0.7, "brand-sample", "Salon"),
+            ("r1", "b1", "Cafe One", "A", "CA", 32.71, -117.16, "Restaurants", 5.0, "2021-01", "2021-01-01", 0.8, 0.1, 0.1, 0.1, 0.8, "brand-sample", "Cafe"),
+            ("r2", "b1", "Cafe One", "A", "CA", 32.71, -117.16, "Restaurants", 1.0, "2021-01", "2021-01-02", -0.8, 0.8, 0.4, 0.7, 0.1, "brand-sample", "Cafe"),
+            ("r3", "b2", "Salon Two", "B", "CA", 34.05, -118.24, "Hair Salons", 4.0, "2021-02", "2021-02-01", 0.5, 0.1, 0.1, 0.1, 0.7, "brand-sample", "Salon"),
         ]
         columns = [
-            "review_id", "business_id", "name", "city", "state", "primary_industry",
-            "stars", "year_month", "review_date", "vader_sentiment_score",
+            "review_id", "business_id", "name", "city", "state", "latitude",
+            "longitude", "primary_industry", "stars", "year_month", "review_date", "vader_sentiment_score",
             "anger_int_avg", "fear_int_avg", "sadness_int_avg", "joy_int_avg",
             "gold_variant_level", "gold_variant_value",
         ]
@@ -72,6 +72,8 @@ class DashboardTransformTests(unittest.TestCase):
         self.assertEqual(cafe["review_count"], 2)
         self.assertAlmostEqual(cafe["avg_stars"], 3.0)
         self.assertAlmostEqual(cafe["low_star_rate"], 0.5)
+        self.assertAlmostEqual(cafe["latitude"], 32.71)
+        self.assertAlmostEqual(cafe["longitude"], -117.16)
         self.assertIn(cafe["attention_tier"], {"moderate", "high"})
         self.assertTrue(cafe["recommended_focus"])
 
@@ -270,14 +272,14 @@ class DashboardTransformTests(unittest.TestCase):
         )
 
         rows = [
-            ("r1", "b1", "u1", "Cafe One", "A", "CA", "Restaurants", None, None, 5.0, "2021-01-01", 0.8, "joy", "joy"),
-            ("r2", "b1", "u2", "Cafe One", "A", "CA", "Restaurants", "Coffee & Tea", None, 1.0, "2021-01-02", -0.8, "anger", "anger"),
-            ("r3", "b2", "u1", "Salon Two", "B", "NV", "Hair Salons", None, None, 4.0, "2021-02-01", 0.5, "joy", "joy"),
-            ("r4", "b3", "u3", "Bakery Three", "C", "AZ", "Bakeries", "Restaurants", "Food", 3.0, "2022-01-01", 0.0, "trust", "trust"),
+            ("r1", "b1", "u1", "Cafe One", "A", "CA", 32.71, -117.16, "Restaurants", None, None, 5.0, "2021-01-01", 0.8, "joy", "joy"),
+            ("r2", "b1", "u2", "Cafe One", "A", "CA", 32.71, -117.16, "Restaurants", "Coffee & Tea", None, 1.0, "2021-01-02", -0.8, "anger", "anger"),
+            ("r3", "b2", "u1", "Salon Two", "B", "NV", 36.17, -115.14, "Hair Salons", None, None, 4.0, "2021-02-01", 0.5, "joy", "joy"),
+            ("r4", "b3", "u3", "Bakery Three", "C", "AZ", 33.45, -112.07, "Bakeries", "Restaurants", "Food", 3.0, "2022-01-01", 0.0, "trust", "trust"),
         ]
         columns = [
             "review_id", "business_id", "user_id", "name", "city", "state",
-            "primary_industry", "secondary_industry", "tertiary_industry", "stars",
+            "latitude", "longitude", "primary_industry", "secondary_industry", "tertiary_industry", "stars",
             "review_date", "vader_sentiment_score", "dominant_emotion",
             "primary_emotion_lex",
         ]
@@ -315,6 +317,38 @@ class DashboardTransformTests(unittest.TestCase):
         validation = validate_gold(industry, "industry", None)
         self.assertTrue(validation["passed"])
         self.assertEqual(industry.count(), 3)
+
+        state = build_gold_variant(
+            silver,
+            gold_level="state",
+            sample_size=None,
+            sample_seed=17,
+            brands=None,
+            date_granularity="month",
+            emotion_column="dominant_emotion",
+            sentiment_column="vader_sentiment_score",
+        )
+        self.assertTrue(validate_gold(state, "state", None)["passed"])
+        self.assertEqual({row.state for row in state.collect()}, {"AZ", "CA", "NV"})
+
+        city_state = build_gold_variant(
+            silver,
+            gold_level="city-of-state",
+            sample_size=None,
+            sample_seed=17,
+            brands=None,
+            date_granularity="month",
+            emotion_column="dominant_emotion",
+            sentiment_column="vader_sentiment_score",
+        )
+        self.assertTrue(validate_gold(city_state, "city-of-state", None)["passed"])
+        self.assertEqual(
+            {row.gold_variant_value for row in city_state.collect()},
+            {"AZ | C", "CA | A", "NV | B"},
+        )
+        ca_city = city_state.where("state = 'CA' AND city = 'A'").first().asDict()
+        self.assertAlmostEqual(ca_city["centroid_latitude"], 32.71)
+        self.assertAlmostEqual(ca_city["centroid_longitude"], -117.16)
 
         emotion = build_gold_variant(
             silver,

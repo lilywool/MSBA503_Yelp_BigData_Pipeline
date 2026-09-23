@@ -50,7 +50,8 @@ bronze_to_silver_yelp
         |
         v
 silver_to_gold_yelp
-  parameterized business, user, date, industry, NLP, or sampled variants
+  parameterized business, user, date, industry, state, city-of-state,
+  NLP, or sampled variants
         |
         v
 data_science_dashboard_yelp
@@ -115,8 +116,8 @@ Each run makes a small set of deliberate choices:
   linguistic, sentiment, emotion, affect, entity, grammar, domain-lexicon,
   time-weighting, or optional transformer families needed for the run.
 - **Analytical scope:** shape Gold around brands, businesses, users, industries,
-  time periods, geography, ratings, sentiment, emotions, or a deterministic
-  review sample.
+  states, cities within states, time periods, ratings, sentiment, emotions, or
+  a deterministic review sample.
 - **Presentation:** build the dashboard-serving layer directly from the chosen
   row-level Gold result.
 
@@ -151,7 +152,8 @@ examples, complete parameter reference, and verification boundary.
 ## Silver feature layer
 
 The fully featured Silver table adds 68 engineered features while preserving
-the joined review, business, and user columns.
+the joined review, business, and user columns, including business latitude and
+longitude for downstream geographic analysis.
 One canonical pandas implementation is used locally and inside Spark executor
 batches, preventing separate local and cloud feature definitions.
 
@@ -203,17 +205,27 @@ With the default configuration, the job creates these Unity Catalog tables in
   `yelp_bronze_review`, `yelp_bronze_tip`, `yelp_bronze_user`
 - Silver: `yelp_silver_reviews`
 - Gold example: `yelp_gold_dashboard_variant`; other Gold tables can be created
-  by business, user, date, industry, sentiment, emotion, or deterministic sample
+  by business, user, date, industry, state, city within state, sentiment,
+  emotion, or deterministic sample
 - Dashboard: `yelp_dashboard_review_sample`,
   `yelp_dashboard_business_summary`, `yelp_dashboard_monthly_summary`
 - Audit: `yelp_pipeline_audit`
+
+`--gold-level state` produces one analytical row per state;
+`--gold-level city-of-state` produces one row per `(state, city)` pair and
+includes coordinate centroids when business coordinates are available. State
+and city filters remain independent cohort controls that can be combined with
+any Gold level.
 
 The job template uses Chipotle and Great Clips only as an example of a
 reproducible brand-comparison Gold variant. The original coursework sample is
 archival and is not a live pipeline input. The dashboard app is configured to
 query only the selected Gold variant's bounded serving tables through a
-Databricks SQL warehouse. When deployed, its service principal should receive
-least-privilege access; no token or password is stored in this repository.
+Databricks SQL warehouse. Its geographic view uses the coordinates carried from
+Bronze through Silver and row-level Gold to provide a business-location bubble
+map and a U.S. state choropleth for review volume, ratings, sentiment, or risk.
+When deployed, its service principal should receive least-privilege access; no
+token or password is stored in this repository.
 
 ## AWS EMR pathway
 

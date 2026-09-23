@@ -226,6 +226,8 @@ def build_silver_frame(reviews, businesses, users, *, broadcast_dimensions=True)
 
     businesses = (businesses.select(
                       "business_id", F.col("name").alias("name"), "city", "state",
+                      F.col("latitude").cast("double").alias("latitude"),
+                      F.col("longitude").cast("double").alias("longitude"),
                       F.col("review_count").cast("long").alias("business_review_count"),
                       F.col("is_open").cast("long").alias("is_open"), "categories",
                   )

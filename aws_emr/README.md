@@ -123,8 +123,9 @@ but storage and runtime controls are AWS-native:
 - `--silver-sample-size` independently bounds the population that reaches
   Silver. Omit it for the full corpus.
 - Repeat `--nlp-component` to select Silver feature families.
-- Silver-to-Gold supports the same business, user, industry, geography, date,
-  sentiment, emotion, star, brand, and sample dependencies as Databricks.
+- Silver-to-Gold supports the same business, user, industry, state,
+  city-of-state, date, sentiment, emotion, star, brand, and sample dependencies
+  as Databricks.
 - If the requested Gold sample exceeds eligible Silver rows, it converges to
   the available population and records both counts.
 

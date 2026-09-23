@@ -7,6 +7,7 @@ import re
 
 import altair as alt
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 from databricks import sql
 from databricks.sdk.core import Config
@@ -54,6 +55,7 @@ def load_businesses() -> pd.DataFrame:
     return query_frame(
         f"""
         SELECT gold_variant_value, business_id, business_name, city, state, primary_industry,
+               latitude, longitude,
                review_count, avg_stars, low_star_rate, avg_weighted_star,
                avg_sentiment, avg_anger, avg_fear, avg_sadness, avg_joy,
                risk_score, attention_tier, recommended_focus
@@ -123,9 +125,10 @@ kpi2.metric("Reviews represented", f"{int(filtered['review_count'].sum()):,}")
 kpi3.metric("Average stars", f"{filtered['avg_stars'].mean():.2f}" if len(filtered) else "—")
 kpi4.metric("High-attention businesses", f"{int((filtered['attention_tier'] == 'high').sum()):,}")
 
-overview, variant_comparison, trends, priorities, explorer = st.tabs(
+overview, geography, variant_comparison, trends, priorities, explorer = st.tabs(
     [
         "Business overview",
+        "Geographic view",
         "Gold variant comparison",
         "Monthly trends",
         "Priority actions",
@@ -154,6 +157,88 @@ with overview:
         .interactive()
     )
     st.altair_chart(scatter, use_container_width=True)
+
+with geography:
+    mapped = filtered.dropna(subset=["latitude", "longitude"]).copy()
+    if mapped.empty:
+        st.info("No business coordinates are available for the selected Gold variant.")
+    else:
+        st.subheader("Business locations")
+        largest = max(float(mapped["review_count"].max()), 1.0)
+        mapped["marker_size"] = 80.0 + (mapped["review_count"] / largest) * 920.0
+        st.map(
+            mapped,
+            latitude="latitude",
+            longitude="longitude",
+            size="marker_size",
+            use_container_width=True,
+        )
+
+        st.subheader("United States summary")
+        mapped["weighted_stars"] = mapped["avg_stars"] * mapped["review_count"]
+        mapped["weighted_sentiment"] = mapped["avg_sentiment"] * mapped["review_count"]
+        mapped["weighted_risk"] = mapped["risk_score"] * mapped["review_count"]
+        state_summary = (
+            mapped.groupby("state", as_index=False)
+            .agg(
+                review_count=("review_count", "sum"),
+                weighted_stars=("weighted_stars", "sum"),
+                weighted_sentiment=("weighted_sentiment", "sum"),
+                weighted_risk=("weighted_risk", "sum"),
+            )
+        )
+        state_summary["avg_stars"] = (
+            state_summary["weighted_stars"] / state_summary["review_count"]
+        )
+        state_summary["avg_sentiment"] = (
+            state_summary["weighted_sentiment"] / state_summary["review_count"]
+        )
+        state_summary["avg_risk"] = (
+            state_summary["weighted_risk"] / state_summary["review_count"]
+        )
+        metric_options = {
+            "Review volume": ("review_count", "Reds", None),
+            "Average rating": ("avg_stars", "YlGn", (1.0, 5.0)),
+            "Average sentiment": ("avg_sentiment", "RdYlGn", (-1.0, 1.0)),
+            "Average risk": ("avg_risk", "Reds", (0.0, 1.0)),
+        }
+        metric_label = st.selectbox("Color states by", list(metric_options))
+        metric, color_scale, range_color = metric_options[metric_label]
+        choropleth = px.choropleth(
+            state_summary,
+            locations="state",
+            locationmode="USA-states",
+            color=metric,
+            scope="usa",
+            color_continuous_scale=color_scale,
+            range_color=range_color,
+            hover_name="state",
+            hover_data={
+                "review_count": ":,",
+                "avg_stars": ":.2f",
+                "avg_sentiment": ":.3f",
+                "avg_risk": ":.3f",
+                "state": False,
+            },
+            labels={metric: metric_label},
+        )
+        choropleth.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=450)
+        st.plotly_chart(choropleth, use_container_width=True)
+        st.caption(
+            "The choropleth renders U.S. state codes; Canadian provinces and other "
+            "regions remain available in the tables and filters."
+        )
+
+        st.dataframe(
+            mapped[
+                [
+                    "business_name", "city", "state", "primary_industry",
+                    "review_count", "avg_stars", "risk_score",
+                ]
+            ].sort_values("review_count", ascending=False),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 with variant_comparison:
     comparison_reviews = reviews.copy()

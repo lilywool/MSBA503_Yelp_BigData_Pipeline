@@ -9,7 +9,7 @@ import pyspark.sql.functions as F
 
 GOLD_LEVELS = (
     "brand-sample", "sample", "business", "user", "date", "industry",
-    "sentiment", "emotion",
+    "state", "city-of-state", "sentiment", "emotion",
 )
 DATE_GRANULARITIES = ("day", "week", "month", "quarter", "year")
 EMOTION_COLUMNS = ("dominant_emotion", "primary_emotion_lex", "hf_emotion_label")
@@ -244,10 +244,13 @@ def build_gold_variant(
         )
     if gold_level == "business":
         require_columns(frame, {"business_id"}, "Business Gold")
+        columns = set(frame.columns)
         dimensions = frame.groupBy("business_id").agg(
             F.first("name", ignorenulls=True).alias("business_name"),
             F.first("city", ignorenulls=True).alias("city"),
             F.first("state", ignorenulls=True).alias("state"),
+            _first_double_if_present(columns, "latitude", "latitude"),
+            _first_double_if_present(columns, "longitude", "longitude"),
             F.first("primary_industry", ignorenulls=True).alias("primary_industry"),
         )
         result = _aggregate_metrics(frame, ["business_id"]).join(dimensions, "business_id", "left")
@@ -278,6 +281,38 @@ def build_gold_variant(
         ).withColumn("gold_variant_level", F.lit("industry")).withColumn(
             "gold_variant_value", F.col("primary_industry")
         )
+    if gold_level == "state":
+        require_columns(frame, {"state"}, "State Gold")
+        localized = frame.withColumn("state", F.upper(F.trim(F.col("state")))).where(
+            F.col("state").isNotNull() & (F.col("state") != "")
+        )
+        return _aggregate_metrics(localized, ["state"]).withColumn(
+            "gold_variant_level", F.lit("state")
+        ).withColumn("gold_variant_value", F.col("state"))
+    if gold_level == "city-of-state":
+        require_columns(frame, {"state", "city"}, "City-of-state Gold")
+        localized = (
+            frame.withColumn("state", F.upper(F.trim(F.col("state"))))
+            .withColumn("city", F.trim(F.col("city")))
+            .where(
+                F.col("state").isNotNull()
+                & (F.col("state") != "")
+                & F.col("city").isNotNull()
+                & (F.col("city") != "")
+            )
+        )
+        result = _aggregate_metrics(localized, ["state", "city"])
+        if {"latitude", "longitude"}.issubset(localized.columns):
+            centroids = localized.groupBy("state", "city").agg(
+                F.avg("latitude").alias("centroid_latitude"),
+                F.avg("longitude").alias("centroid_longitude"),
+            )
+            result = result.join(centroids, ["state", "city"], "left")
+        return result.withColumn(
+            "gold_variant_level", F.lit("city-of-state")
+        ).withColumn(
+            "gold_variant_value", F.concat_ws(" | ", F.col("state"), F.col("city"))
+        )
     if gold_level == "sentiment":
         require_columns(frame, {sentiment_column}, "Sentiment Gold")
         labeled = frame.withColumn("sentiment_label", _sentiment_label(sentiment_column))
@@ -305,6 +340,8 @@ def validate_gold(frame, gold_level: str, sample_size: int | None, expected_vari
         "user": ["user_id"],
         "date": ["date_period"],
         "industry": ["primary_industry"],
+        "state": ["state"],
+        "city-of-state": ["state", "city"],
         "sentiment": ["sentiment_label"],
         "emotion": ["emotion_label"],
     }
@@ -334,12 +371,20 @@ def _avg_if_present(columns: set[str], name: str, alias: str):
     return F.first(F.lit(None).cast("double")).alias(alias)
 
 
+def _first_double_if_present(columns: set[str], name: str, alias: str):
+    if name in columns:
+        return F.first(F.col(name).cast("double"), ignorenulls=True).alias(alias)
+    return F.first(F.lit(None).cast("double")).alias(alias)
+
+
 def build_business_summary(gold):
     columns = set(gold.columns)
     expressions = [
         F.first("name", ignorenulls=True).alias("business_name"),
         F.first("city", ignorenulls=True).alias("city"),
         F.first("state", ignorenulls=True).alias("state"),
+        _first_double_if_present(columns, "latitude", "latitude"),
+        _first_double_if_present(columns, "longitude", "longitude"),
         F.first("primary_industry", ignorenulls=True).alias("primary_industry"),
         F.count("review_id").alias("review_count"),
         F.avg("stars").alias("avg_stars"),

@@ -183,8 +183,11 @@ supplied Free Edition Job template.
 
 Reads the already featured Silver table. It never recomputes NLP. Instead it
 creates one validated Gold variant at the requested grain: `business`, `user`,
-`date`, `industry`, `sentiment`, `emotion`, a deterministic `sample`, or a
-multi-brand sample.
+`date`, `industry`, `state`, `city-of-state`, `sentiment`, `emotion`, a
+deterministic `sample`, or a multi-brand sample. `state` produces one aggregate
+row per state. `city-of-state` keeps state and city as a compound geographic
+key and includes coordinate centroids when the Silver input has business
+coordinates.
 
 Dependencies can be combined before the Gold output is built. Repeat
 `--business-id`, `--business-name`, `--user-id`, `--industry`, `--city`,
@@ -216,11 +219,11 @@ publishes:
 - `workspace.default.yelp_dashboard_monthly_summary`
 
 This task does not sample or choose businesses. It inherits the selected Gold
-variant and its provenance columns. The business table carries review KPIs,
-sentiment/emotion aggregates, a bounded risk score, an attention tier, and a
-suggested focus. The monthly table supports trend and industry views. These are
-serving tables: the batch task prepares dashboard data but does not keep a web
-application running.
+variant and its provenance columns. The business table carries coordinates,
+review KPIs, sentiment/emotion aggregates, a bounded risk score, an attention
+tier, and a suggested focus. The monthly table supports trend and industry
+views. These are serving tables: the batch task prepares dashboard data but
+does not keep a web application running.
 
 Every task appends its outcome and metrics to
 `workspace.default.yelp_pipeline_audit`. Failures are recorded and re-raised.
@@ -230,7 +233,8 @@ variant drawn from a 25,000-review Silver canary as a reproducible example of
 the original coursework comparison. Those
 physical coursework sample files are archival; changing the Gold parameters is
 all that is required to drive the same dashboard from different businesses,
-industries, users, dates, sentiment classes, or emotions.
+industries, users, states, cities within states, dates, sentiment classes, or
+emotions.
 
 ## Create the job from the connected repository
 

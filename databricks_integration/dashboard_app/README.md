@@ -18,11 +18,13 @@ shareable Databricks Apps URL. The URL is stable across pipeline runs; the
 No personal access token or password belongs in this folder. Databricks injects
 the app service principal credentials and the attached warehouse identifier.
 
-The app includes business KPIs, an interactive risk overview, a dynamic Gold
-variant comparison, monthly industry trends, prioritized actions, and a review
-explorer. It reads only the bounded serving tables created by the final pipeline
-task, never the full raw or Silver corpus. Chipotle versus Great Clips appears
-only when that example Gold variant is selected.
+The app includes business KPIs, an interactive risk overview, a coordinate-based
+business bubble map, a U.S. state choropleth selectable by review volume,
+ratings, sentiment, or risk, a dynamic Gold variant comparison, monthly industry
+trends, prioritized actions, and a review explorer. It reads only the bounded
+serving tables created by the final pipeline task, never the full raw or Silver
+corpus. Chipotle versus Great Clips appears only when that example Gold variant
+is selected.
 
 Platform references:
 
