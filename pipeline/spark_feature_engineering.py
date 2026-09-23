@@ -186,7 +186,11 @@ def _add_industry_columns(sdf):
     for index, name in enumerate(
         ("primary_industry", "secondary_industry", "tertiary_industry")
     ):
-        value = F.trim(categories.getItem(index))
+        # ``Column.getItem`` becomes a strict array subscript under ANSI mode,
+        # which Databricks Serverless enables. Yelp businesses commonly expose
+        # fewer than three categories, so use Spark's null-tolerant, zero-based
+        # accessor instead of failing the complete Silver write.
+        value = F.trim(F.get(categories, index))
         sdf = sdf.withColumn(name, F.when(value != "", value))
     return sdf.drop("categories")
 

@@ -21,6 +21,7 @@ class JoinedInputTests(unittest.TestCase):
                      .master("local[1]")
                      .appName("yelp-synthetic-ingestion-test")
                      .config("spark.ui.enabled", "false")
+                     .config("spark.sql.ansi.enabled", "true")
                      .getOrCreate())
 
     @classmethod
@@ -68,6 +69,11 @@ class JoinedInputTests(unittest.TestCase):
             self.assertEqual(taco["secondary_industry"], "Mexican")
             self.assertEqual(taco["tertiary_industry"], "Tacos")
             self.assertEqual(taco["year_month"], "2021-01")
+
+            hair = result.where("review_id = 'r2'").first().asDict()
+            self.assertEqual(hair["primary_industry"], "Hair Salons")
+            self.assertEqual(hair["secondary_industry"], "Beauty")
+            self.assertIsNone(hair["tertiary_industry"])
 
 
 if __name__ == "__main__":
