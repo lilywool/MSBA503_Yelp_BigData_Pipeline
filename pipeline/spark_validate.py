@@ -11,7 +11,7 @@ mistracked, or fabricated. This module ports the SAME checks, at two scales:
                                    driver with reasonable memory.
   * validate_spark_at_scale()   - Spark-native aggregations (corr(), approx counts)
                                    that never collect the full dataset to the driver.
-                                   REQUIRED for the full 8.6M-row run - collecting
+                                   REQUIRED for the full-corpus run - collecting
                                    that much data to a driver just to validate it
                                    is exactly the kind of step that gets skipped
                                    "just this once" under time pressure, which is
@@ -48,7 +48,7 @@ def validate_spark(sdf, text_col: str = "raw_review", max_collect_rows: int = 50
 
 
 def validate_spark_at_scale(sdf, raw_sdf=None, text_col: str = "raw_review") -> dict:
-    """Full-scale (8.6M row) validation, computed entirely in Spark - no driver collect.
+    """Full-corpus validation, computed entirely in Spark - no driver collect.
 
     Mirrors the base validate()'s three checks:
       1. word_count actually tracks real text length (correlation, not just present).
